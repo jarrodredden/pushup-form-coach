@@ -136,6 +136,33 @@ h1 { font-size: clamp(2rem, 5vw, 3.6rem); line-height: 0.98; max-width: 10ch; }
   gap: 12px;
 }
 
+.audio-gate {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(6, 15, 24, 0.68);
+  border: 1px solid rgba(114, 239, 255, 0.16);
+}
+
+.audio-gate strong {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+
+.audio-gate p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.audio-gate--on {
+  border-color: rgba(132, 255, 185, 0.35);
+}
+
 .checklist {
   display: grid;
   gap: 8px;

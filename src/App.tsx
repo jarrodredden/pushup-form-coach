@@ -246,7 +246,7 @@ export default function App() {
 
   const neutralCoachText = modeAllowsAudio
     ? audioUnlocked
-      ? 'Audio cues are unlocked. Keep the phone steady.'
+      ? 'Audio: on (unlocked). Keep the phone steady.'
       : 'Tap Enable sound once to unlock cues on iPhone Safari.'
     : 'Control mode shows the camera and calibration gate only.';
   const calibrationHintCopy = 'You do not need 100% — Ready around 80% with a full body in frame.';
@@ -330,8 +330,12 @@ export default function App() {
   const unlockSound = async () => {
     const unlocked = await unlockAudioContext(audioContextRef);
     setAudioUnlocked(unlocked);
-    if (unlocked) {
+    if (unlocked && modeAllowsAudio) {
       pushLog('info', 'Sound unlocked for iPhone Safari.');
+      if (audioContextRef.current) {
+        playCueTone(audioContextRef.current);
+      }
+      speak('Ready');
     }
   };
 
@@ -539,7 +543,7 @@ export default function App() {
     setCameraError('');
     stopCamera();
     resetCalibrationFlow();
-    void unlockSound();
+    if (modeAllowsAudio) void unlockSound();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -604,7 +608,7 @@ export default function App() {
   const startDemoLoop = () => {
     stopCamera();
     resetCalibrationFlow();
-    void unlockSound();
+    if (modeAllowsAudio) void unlockSound();
     setCameraStatus('live');
     setSessionStartedAt((current) => current ?? nowIso());
     pushLog('system', 'Demo mode running.');
@@ -922,13 +926,22 @@ export default function App() {
               <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
                 Export CSV
               </button>
-              {modeAllowsAudio && !audioUnlocked ? (
-                <button className="button button--primary" onClick={() => void unlockSound()}>
-                  Enable sound
-                </button>
-              ) : null}
             </div>
-            {modeAllowsAudio && !audioUnlocked ? <p className="setup-copy">iPhone Safari may need one tap to unlock audio cues.</p> : null}
+            {modeAllowsAudio ? (
+              <div className={audioUnlocked ? 'audio-gate audio-gate--on' : 'audio-gate'}>
+                <div>
+                  <strong>{audioUnlocked ? 'Audio: on (unlocked)' : 'Audio: needs tap'}</strong>
+                  <p>iPhone won&apos;t show an Allow Audio popup. Tap Enable sound, and turn off the silent switch.</p>
+                </div>
+                {!audioUnlocked ? (
+                  <button className="button button--primary" onClick={() => void unlockSound()}>
+                    Enable sound
+                  </button>
+                ) : (
+                  <span className="pill">sound ready</span>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1000,7 +1013,7 @@ export default function App() {
                   </div>
                   <div>
                     <span className="muted">Audio</span>
-                    <strong>{modeAllowsAudio ? (audioUnlocked ? 'unlocked' : 'locked') : 'off'}</strong>
+                    <strong>{modeAllowsAudio ? (audioUnlocked ? 'Audio: on (unlocked)' : 'Audio: needs tap') : 'off'}</strong>
                   </div>
                 </div>
                 <div className="checklist">
