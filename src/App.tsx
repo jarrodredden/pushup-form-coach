@@ -119,6 +119,8 @@ export default function App() {
   const rafRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
   const readyTimerRef = useRef<number | null>(null);
+  const checkingTimerRef = useRef<number | null>(null);
+  const checkingStartedAtRef = useRef<number | null>(null);
   const runningRef = useRef(false);
   const speakCooldownRef = useRef(0);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
@@ -149,6 +151,7 @@ export default function App() {
   const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
+  const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
   const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
@@ -163,6 +166,36 @@ export default function App() {
   }, [audioUnlocked]);
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
+  }, [calibrationState]);
+  useEffect(() => {
+    if (calibrationState !== 'checking') {
+      if (checkingTimerRef.current !== null) {
+        window.clearInterval(checkingTimerRef.current);
+        checkingTimerRef.current = null;
+      }
+      checkingStartedAtRef.current = null;
+      setCheckingElapsedMs(0);
+      return;
+    }
+
+    if (checkingStartedAtRef.current === null) {
+      checkingStartedAtRef.current = Date.now();
+    }
+
+    if (checkingTimerRef.current !== null) return;
+
+    checkingTimerRef.current = window.setInterval(() => {
+      if (checkingStartedAtRef.current !== null) {
+        setCheckingElapsedMs(Date.now() - checkingStartedAtRef.current);
+      }
+    }, 500);
+
+    return () => {
+      if (checkingTimerRef.current !== null) {
+        window.clearInterval(checkingTimerRef.current);
+        checkingTimerRef.current = null;
+      }
+    };
   }, [calibrationState]);
 
   const currentSummary = useMemo(() => {
@@ -216,6 +249,22 @@ export default function App() {
       ? 'Audio cues are unlocked. Keep the phone steady.'
       : 'Tap Enable sound once to unlock cues on iPhone Safari.'
     : 'Control mode shows the camera and calibration gate only.';
+  const calibrationHintCopy = 'You do not need 100% — Ready around 80% with a full body in frame.';
+  const calibrationChecklist = analysis
+    ? cameraView === 'head-on'
+      ? [
+          { label: 'Confidence', ok: analysis.confidence >= 0.73, detail: `${Math.round(analysis.confidence * 100)}%` },
+          { label: 'Wrists + feet in frame', ok: analysis.framingScore >= 68, detail: `${analysis.framingScore}%` },
+          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
+          { label: 'Head centered', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%` },
+        ]
+      : [
+          { label: 'Confidence', ok: analysis.confidence >= 0.7, detail: `${Math.round(analysis.confidence * 100)}%` },
+          { label: 'Full body in frame', ok: analysis.framingScore >= 66, detail: `${analysis.framingScore}%` },
+          { label: 'Side line visible', ok: analysis.hipSagScore !== null && analysis.hipPikeScore !== null, detail: 'side-view' },
+          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
+        ]
+    : [];
 
   useEffect(() => {
     if (!modeAllowsVisuals) {
@@ -232,11 +281,17 @@ export default function App() {
       window.clearTimeout(readyTimerRef.current);
       readyTimerRef.current = null;
     }
+    if (checkingTimerRef.current !== null) {
+      window.clearInterval(checkingTimerRef.current);
+      checkingTimerRef.current = null;
+    }
   };
 
   const resetCalibrationFlow = () => {
     clearCalibrationTimers();
     stableCalibrationFramesRef.current = 0;
+    checkingStartedAtRef.current = null;
+    setCheckingElapsedMs(0);
     setCalibrationState('checking');
     setCalibrationConfidence(0);
     setCountdownValue(null);
@@ -281,11 +336,10 @@ export default function App() {
   };
 
   const isCalibrationReady = (frame: PoseAnalysis) => {
-    if (frame.confidence < 0.68 || frame.framingScore < 72 || frame.setupHint) return false;
     if (cameraView === 'head-on') {
-      return frame.headAlignmentScore >= 60 && frame.handStackScore >= 60;
+      return frame.confidence >= 0.73 && frame.framingScore >= 68 && frame.handStackScore >= 50 && frame.headAlignmentScore >= 50;
     }
-    return frame.hipSagScore !== null && frame.hipPikeScore !== null && frame.handStackScore >= 60;
+    return frame.confidence >= 0.7 && frame.framingScore >= 66 && frame.hipSagScore !== null && frame.hipPikeScore !== null && frame.handStackScore >= 50;
   };
 
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
@@ -333,7 +387,7 @@ export default function App() {
     if (calibrationStateRef.current !== 'counting') {
       if (isCalibrationReady(frame)) {
         stableCalibrationFramesRef.current += 1;
-        if (stableCalibrationFramesRef.current >= 6 && calibrationStateRef.current === 'checking') {
+        if (stableCalibrationFramesRef.current >= 4 && calibrationStateRef.current === 'checking') {
           setCalibrationState('ready');
           setCurrentCue('Ready');
         }
@@ -900,6 +954,23 @@ export default function App() {
                     <strong>{analysis?.phase ?? 'idle'}</strong>
                   </div>
                 </div>
+                {calibrationState !== 'counting' ? (
+                  <div className="checklist">
+                    <p className="metric-copy">{calibrationHintCopy}</p>
+                    {calibrationChecklist.map((item) => (
+                      <div key={item.label} className={item.ok ? 'checklist__item checklist__item--ok' : 'checklist__item checklist__item--bad'}>
+                        <span>{item.ok ? '●' : '○'}</span>
+                        <strong>{item.label}</strong>
+                        <em>{item.detail}</em>
+                      </div>
+                    ))}
+                    {checkingElapsedMs >= 3000 ? (
+                      <button className="button button--primary" onClick={beginCountdown}>
+                        Start anyway
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="metrics">
                   {metricDefinitions.map((metric) => (
@@ -931,6 +1002,21 @@ export default function App() {
                     <span className="muted">Audio</span>
                     <strong>{modeAllowsAudio ? (audioUnlocked ? 'unlocked' : 'locked') : 'off'}</strong>
                   </div>
+                </div>
+                <div className="checklist">
+                  <p className="metric-copy">{calibrationHintCopy}</p>
+                  {calibrationChecklist.map((item) => (
+                    <div key={item.label} className={item.ok ? 'checklist__item checklist__item--ok' : 'checklist__item checklist__item--bad'}>
+                      <span>{item.ok ? '●' : '○'}</span>
+                      <strong>{item.label}</strong>
+                      <em>{item.detail}</em>
+                    </div>
+                  ))}
+                  {checkingElapsedMs >= 3000 ? (
+                    <button className="button button--primary" onClick={beginCountdown}>
+                      Start anyway
+                    </button>
+                  ) : null}
                 </div>
                 <div className="metric-copy">{neutralCoachText}</div>
               </div>

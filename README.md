@@ -19,7 +19,7 @@ A science-fair push-up coach that runs entirely in the browser.
 - Includes a camera view switch:
   - **Head-on** is the recommended phone demo and the default on first load
   - **Side** is optional for a wider tripod setup
-- Includes a calibration gate and countdown so push-up counting starts only after the person is framed and key points are visible
+- Includes a calibration gate and countdown so push-up counting starts only after the person is framed and key points are visible; Ready usually lands around 75-85% on a real phone
 - Keeps always-on logs for camera, cues, and reps
 - Saves local score history by athlete name
 - Exports the current session as CSV or JSON
