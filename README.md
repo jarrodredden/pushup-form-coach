@@ -51,8 +51,9 @@ The score is intentionally explainable for a science-fair demo.
 - **Side mode** keeps the classic hip sag / hip pike body-line cues for a tripod or wider setup.
 - **Hands under shoulders** rewards a stacked wrist/shoulder position when the landmarks are visible enough.
 - Control and Audio modes keep the skeleton hidden; Visual and Combined show the skeleton and live cues.
+- **Rep counting is separate from form scoring**: any completed down-and-back-up cycle counts as a rep, while bad form lowers the score and adds coaching flags.
 
-Rep counts happen only when the app sees a top position, a bottom position, and a return to the top.
+Rep counts happen only when the app sees a top position, a clear downward move, and a return to the top.
 
 ## Privacy
 

@@ -122,7 +122,7 @@ export default function App() {
   const runningRef = useRef(false);
   const speakCooldownRef = useRef(0);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
-  const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0 });
+  const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
   const frameCounterRef = useRef(0);
   const stableCalibrationFramesRef = useRef(0);
   const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
@@ -260,7 +260,7 @@ export default function App() {
       clearCalibrationTimers();
       setCountdownValue(null);
       setCalibrationState('counting');
-      repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0 };
+      repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
       repAccumulatorRef.current = createEmptyRepAccumulator();
       pushLog('info', 'Calibration complete. Counting started.');
       setCurrentCue('Begin now.');
@@ -372,45 +372,61 @@ export default function App() {
 
   const updateRepState = (frame: PoseAnalysis) => {
     if (calibrationStateRef.current !== 'counting') return;
-    const { elbowAngle, overallScore, confidence } = frame;
+    const { elbowAngle, confidence } = frame;
     const now = Date.now();
     if (confidence < MIN_SIGNAL) return;
 
-    const top = elbowAngle >= 155 && overallScore >= 50;
-    const bottom = elbowAngle <= 92 && frame.elbowDepthScore >= 65;
+    const state = repStateRef.current;
+    const topThreshold = 160;
+    const downThreshold = 145;
 
-    if (!repStateRef.current.sawTop && top) {
-      repStateRef.current.sawTop = true;
-      repAccumulatorRef.current = createEmptyRepAccumulator();
-      pushLog('system', 'Top position locked in.');
+    if (!state.sawTop) {
+      state.topStableFrames = elbowAngle >= topThreshold ? state.topStableFrames + 1 : 0;
+      if (state.topStableFrames >= 2) {
+        state.sawTop = true;
+        state.sawBottom = false;
+        state.bottomStableFrames = 0;
+        repAccumulatorRef.current = createEmptyRepAccumulator();
+        pushLog('system', 'Top position locked in.');
+      }
+      return;
     }
 
-    if (repStateRef.current.sawTop) {
-      repAccumulatorRef.current = {
-        ...repAccumulatorRef.current,
-        samples: repAccumulatorRef.current.samples + 1,
-        depth: repAccumulatorRef.current.depth + frame.elbowDepthScore,
-        elbowFlare: repAccumulatorRef.current.elbowFlare + frame.elbowFlareScore,
-        headAlignment: repAccumulatorRef.current.headAlignment + frame.headAlignmentScore,
-        framing: repAccumulatorRef.current.framing + frame.framingScore,
-        hipSag: repAccumulatorRef.current.hipSag + (frame.hipSagScore ?? 0),
-        hipPike: repAccumulatorRef.current.hipPike + (frame.hipPikeScore ?? 0),
-        handStack: repAccumulatorRef.current.handStack + frame.handStackScore,
-        bestOverall: Math.max(repAccumulatorRef.current.bestOverall, frame.overallScore),
-        worstOverall: repAccumulatorRef.current.samples === 0 ? frame.overallScore : Math.min(repAccumulatorRef.current.worstOverall, frame.overallScore),
-        notes: [...new Set([...repAccumulatorRef.current.notes, ...frame.notes])].slice(0, 8),
-      };
+    repAccumulatorRef.current = {
+      ...repAccumulatorRef.current,
+      samples: repAccumulatorRef.current.samples + 1,
+      depth: repAccumulatorRef.current.depth + frame.elbowDepthScore,
+      elbowFlare: repAccumulatorRef.current.elbowFlare + frame.elbowFlareScore,
+      headAlignment: repAccumulatorRef.current.headAlignment + frame.headAlignmentScore,
+      framing: repAccumulatorRef.current.framing + frame.framingScore,
+      hipSag: repAccumulatorRef.current.hipSag + (frame.hipSagScore ?? 0),
+      hipPike: repAccumulatorRef.current.hipPike + (frame.hipPikeScore ?? 0),
+      handStack: repAccumulatorRef.current.handStack + frame.handStackScore,
+      bestOverall: Math.max(repAccumulatorRef.current.bestOverall, frame.overallScore),
+      worstOverall: repAccumulatorRef.current.samples === 0 ? frame.overallScore : Math.min(repAccumulatorRef.current.worstOverall, frame.overallScore),
+      notes: [...new Set([...repAccumulatorRef.current.notes, ...frame.notes])].slice(0, 8),
+    };
+
+    if (elbowAngle <= downThreshold) {
+      state.bottomStableFrames += 1;
+      state.topStableFrames = 0;
+      if (state.bottomStableFrames >= 2) {
+        state.sawBottom = true;
+      }
+    } else if (elbowAngle >= topThreshold) {
+      state.topStableFrames += 1;
+      state.bottomStableFrames = 0;
+    } else {
+      state.topStableFrames = 0;
+      state.bottomStableFrames = 0;
     }
 
-    if (repStateRef.current.sawTop && bottom) {
-      repStateRef.current.sawBottom = true;
-      pushLog('system', 'Bottom depth reached.');
-    }
-
-    if (repStateRef.current.sawTop && repStateRef.current.sawBottom && top && now - repStateRef.current.lastRepAt > 700) {
-      repStateRef.current.lastRepAt = now;
-      repStateRef.current.sawTop = false;
-      repStateRef.current.sawBottom = false;
+    if (state.sawBottom && state.topStableFrames >= 2 && now - state.lastRepAt > 450) {
+      state.lastRepAt = now;
+      state.sawTop = false;
+      state.sawBottom = false;
+      state.topStableFrames = 0;
+      state.bottomStableFrames = 0;
       finishRep(frame);
     }
   };
@@ -586,7 +602,7 @@ export default function App() {
     setAudioUnlocked(false);
     setCurrentCue('');
     repAccumulatorRef.current = createEmptyRepAccumulator();
-    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0 };
+    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
     frameCounterRef.current = 0;
     pushLog('system', 'Set reset.');
   };
