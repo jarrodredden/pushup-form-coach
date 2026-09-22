@@ -35,6 +35,12 @@ describe('push-up scoring', () => {
     expect(clean.handStackScore).toBeGreaterThan(broken.handStackScore);
   });
 
+  it('keeps head-on setup hints focused on hands and torso', () => {
+    const headOn = analyzePose(makeBadPose(), 'head-on');
+    expect(headOn.setupHint?.toLowerCase()).not.toContain('feet');
+    expect(headOn.setupHint?.toLowerCase()).toContain('hands');
+  });
+
   it('finalizes a rep from accumulated samples', () => {
     const accumulator = createEmptyRepAccumulator();
     accumulator.samples = 4;

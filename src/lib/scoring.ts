@@ -47,7 +47,7 @@ function buildHeadOnNotes(metrics: {
   if (metrics.elbowFlareScore < 74) notes.push('Tuck the elbows in a bit more from the front view.');
   if (metrics.handStackScore < 74) notes.push('Stack the hands under the shoulders.');
   if (metrics.headAlignmentScore < 74) notes.push('Keep the head centered between the shoulders.');
-  if (metrics.framingScore < 70 && !metrics.setupHint) notes.push('Back up or lower the phone until wrists and feet stay in frame.');
+  if (metrics.framingScore < 70 && !metrics.setupHint) notes.push('Back up or lower the phone until hands, torso, and head stay in frame.');
   if (!notes.length) notes.push('Clean head-on rep.');
   return notes;
 }
@@ -75,11 +75,12 @@ function framingHint(landmarks: PosePoint[] | undefined, viewMode: CameraViewMod
   const wristsVisible = averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]);
   const anklesVisible = averageVisibility(landmarks, [LEFT.ankle, RIGHT.ankle]);
   const shouldersVisible = averageVisibility(landmarks, [LEFT.shoulder, RIGHT.shoulder]);
+  const headVisible = averageVisibility(landmarks, [0, 1, 2, 5, 7, 8]);
   if (viewMode === 'head-on') {
-    if (wristsVisible < 0.35 && anklesVisible < 0.35) return 'Move back or lower the phone until wrists and feet are visible.';
-    if (wristsVisible < 0.45) return 'Move back a little so both wrists stay visible.';
-    if (anklesVisible < 0.45) return 'Back up or lower the phone so the feet stay in frame.';
-    if (shouldersVisible < 0.5) return 'Center the athlete so both shoulders stay in frame.';
+    if (wristsVisible < 0.35 && shouldersVisible < 0.35) return 'Move back so hands, torso, and head are visible.';
+    if (wristsVisible < 0.45) return 'Move back a little so both hands stay visible.';
+    if (shouldersVisible < 0.45) return 'Center the torso in frame.';
+    if (headVisible < 0.35) return 'Raise the phone so the head stays visible.';
     return null;
   }
   if (wristsVisible < 0.4 && anklesVisible < 0.4) return 'Use a wider side setup so wrists and feet stay visible.';
@@ -91,7 +92,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   const confidence = averageVisibility(landmarks, REQUIRED);
   if (!landmarks?.length || confidence < MIN_SIGNAL) {
     const setupHint = viewMode === 'head-on'
-      ? 'Move back until wrists and feet are visible for the front-view demo.'
+      ? 'Move back until hands, torso, and head are visible for the front-view demo.'
       : 'Move far enough back that the full side profile and feet stay visible.';
     return {
       viewMode,
@@ -129,6 +130,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   const wristMid = midpoint(lWrist, rWrist);
   const shoulderWidth = Math.max(distance(lShoulder, rShoulder), 0.001);
   const torsoLength = Math.max(distance(shoulderMid, hipMid), 0.001);
+  const headVisible = averageVisibility(landmarks, [0, 1, 2, 5, 7, 8]);
 
   const leftElbowAngle = angle(lShoulder, lElbow, lWrist);
   const rightElbowAngle = angle(rShoulder, rElbow, rWrist);
@@ -179,21 +181,44 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       setupHint: framingHintText,
     });
   } else {
+    const headOnFrameScore = clamp(
+      averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 40 +
+        averageVisibility(landmarks, [LEFT.shoulder, RIGHT.shoulder]) * 35 +
+        headVisible * 25,
+      0,
+      100,
+    );
     overallScore = Math.round(
       elbowDepthScore * 0.4 +
         elbowFlareScore * 0.2 +
         handStackScore * 0.2 +
         headAlignmentScore * 0.15 +
-        framingScore * 0.05,
+        headOnFrameScore * 0.05,
     );
     notes = buildHeadOnNotes({
       elbowDepthScore: Math.round(elbowDepthScore),
       elbowFlareScore: Math.round(elbowFlareScore),
       handStackScore: Math.round(handStackScore),
       headAlignmentScore: Math.round(headAlignmentScore),
-      framingScore,
+      framingScore: Math.round(headOnFrameScore),
       setupHint: framingHintText,
     });
+    return {
+      viewMode,
+      overallScore,
+      elbowAngle,
+      elbowDepthScore: Math.round(elbowDepthScore),
+      elbowFlareScore: Math.round(elbowFlareScore),
+      handStackScore: Math.round(handStackScore),
+      headAlignmentScore: Math.round(headAlignmentScore),
+      framingScore: Math.round(headOnFrameScore),
+      hipSagScore,
+      hipPikeScore,
+      confidence: clamp(confidence, 0, 1),
+      phase,
+      setupHint: framingHintText,
+      notes,
+    };
   }
 
   const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';

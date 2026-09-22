@@ -31,7 +31,7 @@ const viewOptions: { label: string; value: CameraViewMode; helper: string }[] = 
   {
     label: 'Head-on',
     value: 'head-on',
-    helper: 'Default for phone demos. Put the phone low and in front so wrists and feet stay visible.',
+    helper: 'Default for phone demos. Put the phone low and in front so hands, torso, and head stay visible.',
   },
   {
     label: 'Side',
@@ -74,8 +74,8 @@ function shortenCue(message: string) {
     [/^tuck the elbows in.*$/i, 'Tuck elbows in'],
     [/^stack the hands.*$/i, 'Hands under shoulders'],
     [/^keep the head centered.*$/i, 'Keep head centered'],
-    [/^back up or lower the phone.*$/i, 'Back up for wrists and feet'],
-    [/^move back or lower the phone.*$/i, 'Back up for wrists and feet'],
+    [/^back up or lower the phone.*$/i, 'Back up for hands and torso'],
+    [/^move back or lower the phone.*$/i, 'Back up for hands and torso'],
     [/^keep the hips from sagging.*$/i, 'Keep hips level'],
     [/^keep the hips level and avoid piking.*$/i, 'Keep hips level'],
     [/^clean head-on rep.*$/i, 'Good rep'],
@@ -282,7 +282,7 @@ export default function App() {
     ? cameraView === 'head-on'
       ? [
           { label: 'Confidence (required)', ok: analysis.confidence >= 0.72, detail: `${Math.round(analysis.confidence * 100)}%` },
-          { label: 'Wrists + feet in frame (required)', ok: analysis.framingScore >= 64, detail: `${analysis.framingScore}%` },
+          { label: 'Hands + torso in frame (required)', ok: analysis.framingScore >= 64, detail: `${analysis.framingScore}%` },
           { label: 'Hands under shoulders (coach)', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
           { label: 'Head centered (coach)', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%` },
         ]
@@ -377,8 +377,9 @@ export default function App() {
   const getRequiredFailureText = (frame: PoseAnalysis) => {
     const hint = frame.setupHint?.toLowerCase() ?? '';
     if (!hint) return null;
-    if (hint.includes('feet') && hint.includes('wrists')) return 'MOVE BACK: Feet and wrists not visible';
-    if (hint.includes('feet')) return 'MOVE BACK: Feet not visible';
+    if (hint.includes('hands') && hint.includes('torso')) return 'MOVE BACK: Hands and torso not visible';
+    if (hint.includes('hands')) return 'MOVE BACK: Hands not visible';
+    if (hint.includes('torso')) return 'MOVE BACK: Torso not visible';
     if (hint.includes('wrists')) return 'MOVE BACK: Wrists not visible';
     if (hint.includes('shoulders')) return 'MOVE BACK: Shoulders not visible';
     if (hint.includes('full side profile')) return 'MOVE BACK: Full body not visible';
@@ -425,6 +426,61 @@ export default function App() {
       playCueTone(audioContextRef.current);
     }
     speak(shortCue);
+  };
+
+  const drawGuides = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    if (!(modeAllowsVisuals && cameraView === 'head-on')) return;
+
+    const handY = height * 0.76;
+    const handRx = width * 0.085;
+    const handRy = height * 0.05;
+    const leftHandX = width * 0.33;
+    const rightHandX = width * 0.67;
+    const footZoneY = height * 0.89;
+    const footZoneRx = width * 0.19;
+    const footZoneRy = height * 0.045;
+
+    ctx.save();
+    ctx.lineWidth = Math.max(2, width / 260);
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = 'rgba(114, 239, 255, 0.12)';
+    ctx.strokeStyle = 'rgba(114, 239, 255, 0.72)';
+    ctx.setLineDash([8, 8]);
+    for (const x of [leftHandX, rightHandX]) {
+      ctx.beginPath();
+      ctx.ellipse(x, handY, handRx, handRy, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(114, 239, 255, 0.06)';
+    ctx.strokeStyle = 'rgba(114, 239, 255, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(width / 2, footZoneY, footZoneRx, footZoneRy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(8, 17, 26, 0.92)';
+    ctx.strokeStyle = 'rgba(114, 239, 255, 0.26)';
+    ctx.lineWidth = Math.max(1.5, width / 360);
+    const labelWidth = Math.max(120, width * 0.22);
+    const labelHeight = Math.max(24, height * 0.045);
+    const labelX = width / 2 - labelWidth / 2;
+    const labelY = footZoneY + footZoneRy + 10;
+    const radius = 999;
+    ctx.beginPath();
+    ctx.roundRect(labelX, labelY, labelWidth, labelHeight, radius);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#bafcff';
+    ctx.font = `600 ${Math.max(12, Math.round(width / 42))}px Inter, ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('optional feet zone', width / 2, labelY + labelHeight / 2);
+
+    ctx.restore();
   };
 
   const processAnalysis = (frame: PoseAnalysis) => {
@@ -566,8 +622,7 @@ export default function App() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
-    if (!ctx || !video || !landmarks?.length) {
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    if (!ctx || !video) {
       return;
     }
     const width = video.videoWidth || canvas.width;
@@ -579,6 +634,8 @@ export default function App() {
     }
     // Keep scoring on raw camera coordinates; the preview mirror is applied to both layers together.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawGuides(ctx, canvas.width, canvas.height);
+    if (!landmarks?.length) return;
     ctx.lineWidth = Math.max(2, canvas.width / 240);
     ctx.strokeStyle = 'rgba(123, 245, 255, 0.78)';
     ctx.fillStyle = '#8ffaff';
@@ -1198,7 +1255,7 @@ export default function App() {
             <ul className="notes">
               <li>All pose analysis runs on-device in the browser.</li>
               <li>Feedback modes are logged continuously so every coaching cue is auditable.</li>
-              <li>Use Head-on for the phone demo: put the phone low and in front so wrists and feet stay visible. Side view is optional for a wider tripod setup.</li>
+              <li>Use Head-on for the phone demo: put the phone low and in front so hands, torso, and head stay visible. Feet are optional. Side view is optional for a wider tripod setup.</li>
               <li>Export the session as JSON or CSV for science-fair charts and comparisons.</li>
             </ul>
           </article>
