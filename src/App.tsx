@@ -66,6 +66,30 @@ function speak(message: string) {
   window.speechSynthesis.speak(utterance);
 }
 
+function shortenCue(message: string) {
+  const normalized = message.trim();
+  const replacements: Array<[RegExp, string]> = [
+    [/^lower a little deeper.*$/i, 'Go a little deeper'],
+    [/^lower deeper.*$/i, 'Go a little deeper'],
+    [/^tuck the elbows in.*$/i, 'Tuck elbows in'],
+    [/^stack the hands.*$/i, 'Hands under shoulders'],
+    [/^keep the head centered.*$/i, 'Keep head centered'],
+    [/^back up or lower the phone.*$/i, 'Back up for wrists and feet'],
+    [/^move back or lower the phone.*$/i, 'Back up for wrists and feet'],
+    [/^keep the hips from sagging.*$/i, 'Keep hips level'],
+    [/^keep the hips level and avoid piking.*$/i, 'Keep hips level'],
+    [/^clean head-on rep.*$/i, 'Good rep'],
+    [/^clean side-view rep.*$/i, 'Good rep'],
+    [/^audio cues are unlocked.*$/i, 'Audio unlocked'],
+    [/^tap enable sound.*$/i, 'Tap Enable sound'],
+  ];
+  for (const [pattern, replacement] of replacements) {
+    if (pattern.test(normalized)) return replacement;
+  }
+  const words = normalized.split(/\s+/);
+  return words.length > 8 ? `${words.slice(0, 8).join(' ')}…` : normalized;
+}
+
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextCtor) return false;
@@ -122,12 +146,13 @@ export default function App() {
   const checkingTimerRef = useRef<number | null>(null);
   const checkingStartedAtRef = useRef<number | null>(null);
   const runningRef = useRef(false);
-  const speakCooldownRef = useRef(0);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
   const frameCounterRef = useRef(0);
   const stableCalibrationFramesRef = useRef(0);
   const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
+  const cueLastTextRef = useRef('');
+  const cueLastEmittedAtRef = useRef(0);
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
@@ -360,20 +385,25 @@ export default function App() {
   };
 
   const renderAnalysisCue = (cue: string) => {
-    pushLog('cue', cue);
+    const shortCue = shortenCue(cue);
+    const now = Date.now();
+    const isNewCue = shortCue !== cueLastTextRef.current;
+    const cooldownExpired = now - cueLastEmittedAtRef.current >= 5000;
+    if (!isNewCue && !cooldownExpired) return;
+
+    cueLastTextRef.current = shortCue;
+    cueLastEmittedAtRef.current = now;
+    setCurrentCue(shortCue);
+    pushLog('cue', shortCue);
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     if (!currentModeAllowsAudio || !audioUnlockedRef.current) {
       return;
     }
-    const now = Date.now();
-    if (now - speakCooldownRef.current > 1800) {
-      speakCooldownRef.current = now;
-      if (audioContextRef.current) {
-        void audioContextRef.current.resume();
-        playCueTone(audioContextRef.current);
-      }
-      speak(cue);
+    if (audioContextRef.current) {
+      void audioContextRef.current.resume();
+      playCueTone(audioContextRef.current);
     }
+    speak(shortCue);
   };
 
   const processAnalysis = (frame: PoseAnalysis) => {
@@ -408,13 +438,12 @@ export default function App() {
 
     const cue = frame.notes[0] ?? (frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
     if (currentModeAllowsVisuals) {
-      setCurrentCue(cue);
+      renderAnalysisCue(cue);
     } else if (currentModeAllowsAudio) {
       setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Enable sound for audio cues.');
     } else {
       setCurrentCue('Control mode: camera only.');
     }
-    if (frame.notes.length) renderAnalysisCue(cue);
     updateRepState(frame);
   };
 
