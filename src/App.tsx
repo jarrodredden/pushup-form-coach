@@ -145,6 +145,8 @@ export default function App() {
   const readyTimerRef = useRef<number | null>(null);
   const checkingTimerRef = useRef<number | null>(null);
   const checkingStartedAtRef = useRef<number | null>(null);
+  const confidenceSmoothRef = useRef(0);
+  const activeFailureRef = useRef({ text: '', frames: 0, startedAt: 0 });
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
@@ -177,6 +179,7 @@ export default function App() {
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
+  const [activeBanner, setActiveBanner] = useState<string | null>(null);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
   const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
@@ -371,6 +374,18 @@ export default function App() {
     return frame.confidence >= 0.7 && frame.framingScore >= 62;
   };
 
+  const getRequiredFailureText = (frame: PoseAnalysis) => {
+    const hint = frame.setupHint?.toLowerCase() ?? '';
+    if (!hint) return null;
+    if (hint.includes('feet') && hint.includes('wrists')) return 'MOVE BACK: Feet and wrists not visible';
+    if (hint.includes('feet')) return 'MOVE BACK: Feet not visible';
+    if (hint.includes('wrists')) return 'MOVE BACK: Wrists not visible';
+    if (hint.includes('shoulders')) return 'MOVE BACK: Shoulders not visible';
+    if (hint.includes('full side profile')) return 'MOVE BACK: Full body not visible';
+    if (frame.confidence < 0.65) return 'HOLD STILL: Need a clearer body';
+    return null;
+  };
+
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
     setSessionLogs((current) => [
       {
@@ -393,12 +408,18 @@ export default function App() {
 
     cueLastTextRef.current = shortCue;
     cueLastEmittedAtRef.current = now;
-    setCurrentCue(shortCue);
-    pushLog('cue', shortCue);
+    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+
+    if (currentModeAllowsVisuals) {
+      setCurrentCue(shortCue);
+    }
+
     if (!currentModeAllowsAudio || !audioUnlockedRef.current) {
       return;
     }
+
+    pushLog('cue', shortCue);
     if (audioContextRef.current) {
       void audioContextRef.current.resume();
       playCueTone(audioContextRef.current);
@@ -408,13 +429,34 @@ export default function App() {
 
   const processAnalysis = (frame: PoseAnalysis) => {
     setAnalysis(frame);
+    const smoothConfidence = confidenceSmoothRef.current
+      ? confidenceSmoothRef.current * 0.85 + frame.confidence * 0.15
+      : frame.confidence;
+    confidenceSmoothRef.current = smoothConfidence;
+    setCalibrationConfidence(Math.round(smoothConfidence * 100));
+
+    const failureText = getRequiredFailureText(frame);
+    if (failureText) {
+      if (activeFailureRef.current.text === failureText) {
+        activeFailureRef.current.frames += 1;
+      } else {
+        activeFailureRef.current = { text: failureText, frames: 1, startedAt: Date.now() };
+      }
+      const persistMs = Date.now() - activeFailureRef.current.startedAt;
+      if (activeFailureRef.current.frames >= 30 || persistMs >= 1000) {
+        setActiveBanner(failureText);
+        renderAnalysisCue(failureText);
+      }
+    } else {
+      activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
+      setActiveBanner(null);
+    }
+
     if (frame.confidence < MIN_SIGNAL) {
-      setCalibrationConfidence(Math.round(frame.confidence * 100));
       setCurrentCue(frame.setupHint ?? 'Move the full body into frame.');
       return;
     }
 
-    setCalibrationConfidence(Math.round(frame.confidence * 100));
     const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
 
@@ -437,11 +479,12 @@ export default function App() {
     }
 
     const cue = frame.notes[0] ?? (frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
-    if (currentModeAllowsVisuals) {
+    if (currentModeAllowsVisuals || currentModeAllowsAudio) {
       renderAnalysisCue(cue);
-    } else if (currentModeAllowsAudio) {
+    }
+    if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
       setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Enable sound for audio cues.');
-    } else {
+    } else if (!currentModeAllowsVisuals) {
       setCurrentCue('Control mode: camera only.');
     }
     updateRepState(frame);
@@ -883,6 +926,7 @@ export default function App() {
               <span>{cameraView}</span>
               <span>{feedbackMode}</span>
             </div>
+            {activeBanner ? <div className="urgent-banner">{activeBanner}</div> : null}
             <div className="calibration-overlay">
               <span className={calibrationState === 'countdown' || calibrationState === 'counting' ? 'calibration-overlay__badge calibration-overlay__badge--ready' : 'calibration-overlay__badge'}>
                 {calibrationStatusText}
