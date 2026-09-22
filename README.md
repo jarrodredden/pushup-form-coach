@@ -16,6 +16,9 @@ A science-fair push-up coach that runs entirely in the browser.
   - visual
   - audio
   - combined
+- Includes a camera view switch:
+  - **Head-on** is the recommended phone demo and the default on first load
+  - **Side** is optional for a wider tripod setup
 - Keeps always-on logs for camera, cues, and reps
 - Saves local score history by athlete name
 - Exports the current session as CSV or JSON
@@ -34,16 +37,16 @@ Open the local Vite URL in desktop Chrome or Safari. For iPhone camera testing, 
 
 - The app requests the camera with `playsInline`, `muted`, and `autoPlay` so it works in Safari's video pipeline.
 - Camera access requires a secure context, which means HTTPS or localhost.
-- For best results, place the phone on a tripod or stand and keep the body roughly side-on to the camera.
+- For the default phone demo, use **Head-on**: place the phone low or on a floor stand in front of the athlete so wrists and feet stay visible.
+- Switch to **Side** only if you have room for the classic side-profile setup.
 - If camera permissions fail, switch to demo mode.
 
 ## Scoring model
 
 The score is intentionally explainable for a science-fair demo.
 
-- **Elbow depth** favors a lower elbow angle at the bottom of the rep.
-- **Hip sag** penalizes the hips dropping below the shoulder-to-ankle body line.
-- **Hip pike** penalizes the hips lifting too far above that line.
+- **Head-on mode** emphasizes elbow depth, elbow flare, hands under shoulders, head alignment, and framing. It does **not** pretend the side-view body line is accurate.
+- **Side mode** keeps the classic hip sag / hip pike body-line cues for a tripod or wider setup.
 - **Hands under shoulders** rewards a stacked wrist/shoulder position when the landmarks are visible enough.
 
 Rep counts happen only when the app sees a top position, a bottom position, and a return to the top.

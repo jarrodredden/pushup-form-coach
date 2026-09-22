@@ -1,5 +1,6 @@
 export type FeedbackMode = 'control' | 'visual' | 'audio' | 'combined';
 export type CameraFacing = 'user' | 'environment';
+export type CameraViewMode = 'head-on' | 'side';
 
 export interface PosePoint {
   x: number;
@@ -10,20 +11,28 @@ export interface PosePoint {
 }
 
 export interface PoseAnalysis {
+  viewMode: CameraViewMode;
   overallScore: number;
   elbowAngle: number;
   elbowDepthScore: number;
-  hipSagScore: number;
-  hipPikeScore: number;
+  elbowFlareScore: number;
   handStackScore: number;
+  headAlignmentScore: number;
+  framingScore: number;
+  hipSagScore: number | null;
+  hipPikeScore: number | null;
   confidence: number;
   phase: 'top' | 'bottom' | 'mid' | 'unknown';
+  setupHint: string | null;
   notes: string[];
 }
 
 export interface RepAccumulator {
   samples: number;
   depth: number;
+  elbowFlare: number;
+  headAlignment: number;
+  framing: number;
   hipSag: number;
   hipPike: number;
   handStack: number;
@@ -34,12 +43,16 @@ export interface RepAccumulator {
 
 export interface SessionRep {
   index: number;
+  viewMode: CameraViewMode;
   score: number;
   notes: string[];
   elbowDepthScore: number;
-  hipSagScore: number;
-  hipPikeScore: number;
+  elbowFlareScore: number;
   handStackScore: number;
+  headAlignmentScore: number;
+  framingScore: number;
+  hipSagScore: number | null;
+  hipPikeScore: number | null;
   confidence: number;
   timestamp: number;
 }
@@ -63,6 +76,7 @@ export interface SessionEntry {
   afterScore: number;
   mode: FeedbackMode;
   cameraFacing: CameraFacing;
+  cameraView: CameraViewMode;
   demoMode: boolean;
   notes: string[];
 }

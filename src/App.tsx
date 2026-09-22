@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { createDemoPose } from './lib/demo';
 import { buildCsv, downloadTextFile, exportSessionJson } from './lib/export';
+import { shouldMirrorPreview } from './lib/mirroring';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
 import {
   CameraFacing,
+  CameraViewMode,
   FeedbackMode,
   LogEntry,
   PoseAnalysis,
@@ -25,6 +27,19 @@ const cameraOptions: { label: string; value: CameraFacing }[] = [
   { label: 'Back camera', value: 'environment' },
 ];
 
+const viewOptions: { label: string; value: CameraViewMode; helper: string }[] = [
+  {
+    label: 'Head-on',
+    value: 'head-on',
+    helper: 'Default for phone demos. Put the phone low and in front so wrists and feet stay visible.',
+  },
+  {
+    label: 'Side',
+    value: 'side',
+    helper: 'Advanced option. Use a tripod or extra room if you want the side-view hip-line cues.',
+  },
+];
+
 const feedbackOptions: { label: string; value: FeedbackMode }[] = [
   { label: 'Control', value: 'control' },
   { label: 'Visual', value: 'visual' },
@@ -41,16 +56,6 @@ const qualityLabel = (value: number) => {
 };
 const nowIso = () => new Date().toISOString();
 
-function buildCueSet(analysis: PoseAnalysis) {
-  const cues = [] as string[];
-  if (analysis.elbowDepthScore < 72) cues.push('Lower deeper until the elbows bend closer to a right angle.');
-  if (analysis.hipSagScore < 74) cues.push('Lift the hips to keep a straight plank from shoulders to heels.');
-  if (analysis.hipPikeScore < 74) cues.push('Relax the pike and keep the hips level with the shoulders.');
-  if (analysis.handStackScore < 72) cues.push('Stack hands more directly under the shoulders.');
-  if (!cues.length && analysis.overallScore >= 80) cues.push('Clean rep. Keep that line locked in.');
-  return cues;
-}
-
 function speak(message: string) {
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
@@ -61,16 +66,17 @@ function speak(message: string) {
   window.speechSynthesis.speak(utterance);
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  const color = value >= 85 ? 'good' : value >= 70 ? 'mid' : 'bad';
+function Metric({ label, value }: { label: string; value: number | null }) {
+  const actualValue = value ?? 0;
+  const color = actualValue >= 85 ? 'good' : actualValue >= 70 ? 'mid' : 'bad';
   return (
     <div className="metric">
       <div className="metric__head">
         <span>{label}</span>
-        <strong>{Math.round(value)}</strong>
+        <strong>{value === null ? '—' : Math.round(value)}</strong>
       </div>
       <div className="metric__bar">
-        <span className={color} style={{ width: `${clamp(value, 0, 100)}%` }} />
+        <span className={color} style={{ width: `${clamp(actualValue, 0, 100)}%` }} />
       </div>
     </div>
   );
@@ -90,6 +96,7 @@ export default function App() {
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
+  const [cameraView, setCameraView] = useState<CameraViewMode>('head-on');
   const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('combined');
   const [demoMode, setDemoMode] = useState(false);
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'loading' | 'live' | 'error'>('idle');
@@ -105,6 +112,8 @@ export default function App() {
   const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [sessionStopped, setSessionStopped] = useState(false);
+  const previewMirrored = shouldMirrorPreview(cameraFacing);
+  const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
 
   const currentSummary = useMemo(() => {
     const totalScore = sessionReps.reduce((sum, rep) => sum + rep.score, 0);
@@ -126,6 +135,22 @@ export default function App() {
       delta: after - before,
     };
   }, [athleteName, baselineScore, currentSummary.averageScore, history]);
+
+  const metricDefinitions = cameraView === 'head-on'
+    ? [
+      { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
+      { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
+      { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
+      { label: 'Head alignment', value: analysis?.headAlignmentScore ?? null },
+      { label: 'Framing', value: analysis?.framingScore ?? null },
+    ]
+    : [
+      { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
+      { label: 'Hip sag', value: analysis?.hipSagScore ?? null },
+      { label: 'Hip pike', value: analysis?.hipPikeScore ?? null },
+      { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
+      { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
+    ];
 
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
     setSessionLogs((current) => [
@@ -154,17 +179,17 @@ export default function App() {
 
   const processAnalysis = (frame: PoseAnalysis) => {
     setAnalysis(frame);
-    const cues = buildCueSet(frame);
     if (frame.confidence < MIN_SIGNAL) {
-      setCurrentCue('Move the full body into frame.');
+      setCurrentCue(frame.setupHint ?? 'Move the full body into frame.');
       return;
     }
-    if (cues.length && (feedbackMode === 'visual' || feedbackMode === 'combined')) {
-      setCurrentCue(cues[0]);
-    } else if (!cues.length) {
-      setCurrentCue(frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
+    const cue = frame.notes[0] ?? (frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
+    if (frame.notes.length && (feedbackMode === 'visual' || feedbackMode === 'combined')) {
+      setCurrentCue(cue);
+    } else {
+      setCurrentCue(cue);
     }
-    if (cues.length) renderAnalysisCue(cues[0]);
+    if (frame.notes.length) renderAnalysisCue(cue);
     updateRepState(frame);
   };
 
@@ -174,8 +199,7 @@ export default function App() {
     setReps((value) => value + 1);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
-    const cues = buildCueSet(analysisFrame);
-    if (cues.length) renderAnalysisCue(cues[0]);
+    if (analysisFrame.notes.length) renderAnalysisCue(analysisFrame.notes[0]);
     repAccumulatorRef.current = createEmptyRepAccumulator();
   };
 
@@ -198,12 +222,15 @@ export default function App() {
         ...repAccumulatorRef.current,
         samples: repAccumulatorRef.current.samples + 1,
         depth: repAccumulatorRef.current.depth + frame.elbowDepthScore,
-        hipSag: repAccumulatorRef.current.hipSag + frame.hipSagScore,
-        hipPike: repAccumulatorRef.current.hipPike + frame.hipPikeScore,
+        elbowFlare: repAccumulatorRef.current.elbowFlare + frame.elbowFlareScore,
+        headAlignment: repAccumulatorRef.current.headAlignment + frame.headAlignmentScore,
+        framing: repAccumulatorRef.current.framing + frame.framingScore,
+        hipSag: repAccumulatorRef.current.hipSag + (frame.hipSagScore ?? 0),
+        hipPike: repAccumulatorRef.current.hipPike + (frame.hipPikeScore ?? 0),
         handStack: repAccumulatorRef.current.handStack + frame.handStackScore,
         bestOverall: Math.max(repAccumulatorRef.current.bestOverall, frame.overallScore),
         worstOverall: repAccumulatorRef.current.samples === 0 ? frame.overallScore : Math.min(repAccumulatorRef.current.worstOverall, frame.overallScore),
-        notes: [...new Set([...repAccumulatorRef.current.notes, ...frame.notes])].slice(0, 6),
+        notes: [...new Set([...repAccumulatorRef.current.notes, ...frame.notes])].slice(0, 8),
       };
     }
 
@@ -236,6 +263,7 @@ export default function App() {
       canvas.width = width;
       canvas.height = height;
     }
+    // Keep scoring on raw camera coordinates; the preview mirror is applied to both layers together.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineWidth = Math.max(2, canvas.width / 240);
     ctx.strokeStyle = 'rgba(123, 245, 255, 0.78)';
@@ -297,7 +325,7 @@ export default function App() {
           const result = poseRef.current.detectForVideo(videoEl, performance.now());
           const landmarks = result.landmarks[0] as PosePoint[] | undefined;
           drawSkeleton(landmarks);
-          const frame = analyzePose(landmarks);
+          const frame = analyzePose(landmarks, cameraView);
           processAnalysis(frame);
         }
         rafRef.current = requestAnimationFrame(loop);
@@ -337,9 +365,9 @@ export default function App() {
     const loop = () => {
       if (!runningRef.current) return;
       frameCounterRef.current += 1;
-      const landmarks = createDemoPose(frameCounterRef.current);
+      const landmarks = createDemoPose(frameCounterRef.current, cameraView);
       drawSkeleton(landmarks);
-      const frame = analyzePose(landmarks);
+      const frame = analyzePose(landmarks, cameraView);
       processAnalysis(frame);
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -397,6 +425,7 @@ export default function App() {
       afterScore: beforeAfter.after,
       mode: feedbackMode,
       cameraFacing,
+      cameraView,
       demoMode,
       notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
     };
@@ -479,7 +508,7 @@ export default function App() {
     }
     return stopCamera;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demoMode, cameraFacing]);
+  }, [demoMode, cameraFacing, cameraView]);
 
   useEffect(() => {
     if (!sessionStopped || !analysis) return;
@@ -495,6 +524,7 @@ export default function App() {
       afterScore: beforeAfter.after,
       mode: feedbackMode,
       cameraFacing,
+      cameraView,
       demoMode,
       notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
     };
@@ -503,7 +533,7 @@ export default function App() {
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
     setBaselineScore(summary.afterScore);
     setSessionStopped(false);
-  }, [analysis, athleteName, beforeAfter.after, beforeAfter.before, cameraFacing, currentSummary.averageScore, currentSummary.bestScore, demoMode, feedbackMode, history, reps, sessionReps, sessionStopped]);
+  }, [analysis, athleteName, beforeAfter.after, beforeAfter.before, cameraFacing, cameraView, currentSummary.averageScore, currentSummary.bestScore, demoMode, feedbackMode, history, reps, sessionReps, sessionStopped]);
 
   useEffect(() => {
     return () => {
@@ -528,8 +558,14 @@ export default function App() {
       <section className="layout">
         <div className="camera-card">
           <div className="video-frame">
-            <video ref={videoRef} className="video" playsInline muted autoPlay />
-            <canvas ref={canvasRef} className="overlay" />
+            <video
+              ref={videoRef}
+              className={previewMirrored ? 'video mirror' : 'video'}
+              playsInline
+              muted
+              autoPlay
+            />
+            <canvas ref={canvasRef} className={previewMirrored ? 'overlay mirror' : 'overlay'} />
             <div className="rep-counter">
               <span className="rep-counter__label">reps</span>
               <strong>{reps}</strong>
@@ -537,6 +573,7 @@ export default function App() {
             <div className="status-badges">
               <span>{cameraStatus === 'live' ? 'live' : cameraStatus}</span>
               <span>{demoMode ? 'demo' : 'camera'}</span>
+              <span>{cameraView}</span>
               <span>{feedbackMode}</span>
             </div>
           </div>
@@ -549,6 +586,20 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            <div className="control-row">
+              {viewOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={cameraView === option.value ? 'button button--active' : 'button'}
+                  onClick={() => setCameraView(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="setup-copy">{activeViewHelper}</p>
 
             <div className="control-row">
               {feedbackOptions.map((option) => (
@@ -617,11 +668,15 @@ export default function App() {
             </div>
 
             <div className="metrics">
-              <Metric label="Elbow depth" value={analysis?.elbowDepthScore ?? 0} />
-              <Metric label="Hip sag" value={analysis?.hipSagScore ?? 0} />
-              <Metric label="Hip pike" value={analysis?.hipPikeScore ?? 0} />
-              <Metric label="Hands stacked" value={analysis?.handStackScore ?? 0} />
+              {metricDefinitions.map((metric) => (
+                <Metric key={metric.label} label={metric.label} value={metric.value} />
+              ))}
             </div>
+            <p className="metric-copy">
+              {cameraView === 'head-on'
+                ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Hip sag/pike is intentionally softened here.'
+                : 'Side view keeps the classic hip sag / hip pike body-line cues, but it needs more room and a wider setup.'}
+            </p>
           </article>
 
           <article className="card coaching-card">
@@ -668,7 +723,7 @@ export default function App() {
                     </div>
                     <div>
                       <strong>{entry.reps} reps</strong>
-                      <span>{entry.afterScore} / 100</span>
+                      <span>{entry.afterScore} / 100 · {entry.cameraView}</span>
                     </div>
                   </div>
                 ))
@@ -703,7 +758,7 @@ export default function App() {
             <ul className="notes">
               <li>All pose analysis runs on-device in the browser.</li>
               <li>Feedback modes are logged continuously so every coaching cue is auditable.</li>
-              <li>Use a phone stand or tripod and keep the camera angle side-on for more reliable rep scoring.</li>
+              <li>Use Head-on for the phone demo: put the phone low and in front so wrists and feet stay visible. Side view is optional for a wider tripod setup.</li>
               <li>Export the session as JSON or CSV for science-fair charts and comparisons.</li>
             </ul>
           </article>
