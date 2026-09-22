@@ -53,6 +53,39 @@ h1 { font-size: clamp(2rem, 5vw, 3.6rem); line-height: 0.98; max-width: 10ch; }
 .rep-counter__label { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; }
 .rep-counter strong { font-size: 2.4rem; line-height: 1; color: #fff; }
 .status-badges { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.calibration-overlay {
+  position: absolute;
+  inset: 50% 12px auto;
+  transform: translateY(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.calibration-overlay__badge {
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: rgba(6, 15, 24, 0.84);
+  border: 1px solid rgba(114, 239, 255, 0.2);
+  color: var(--cyan-strong);
+  font-size: 0.88rem;
+}
+
+.calibration-overlay__badge--ready {
+  color: #aaffd4;
+  border-color: rgba(132, 255, 185, 0.45);
+}
+
+.calibration-overlay__meter {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(6, 15, 24, 0.72);
+  border: 1px solid rgba(114, 239, 255, 0.12);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
 .card, .controls {
   padding: 16px; border-radius: 24px; background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
 }
@@ -89,6 +122,19 @@ h1 { font-size: clamp(2rem, 5vw, 3.6rem); line-height: 0.98; max-width: 10ch; }
 .metric__bar .good { background: linear-gradient(90deg, #66f7d0, #b4fffb); }
 .metric__bar .mid { background: linear-gradient(90deg, #64dbff, #b6ffff); }
 .metric__bar .bad { background: linear-gradient(90deg, #ffcf6a, #ff9c6a); }
+
+.metric-copy,
+.setup-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.calibration-panel {
+  display: grid;
+  gap: 12px;
+}
 .card-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .card-head h2 { font-size: 1.08rem; }
 .cue { font-size: 1rem; line-height: 1.5; color: #f5feff; }

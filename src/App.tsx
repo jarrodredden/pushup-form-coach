@@ -66,6 +66,34 @@ function speak(message: string) {
   window.speechSynthesis.speak(utterance);
 }
 
+async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
+  const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return false;
+  if (!contextRef.current) {
+    contextRef.current = new AudioContextCtor();
+  }
+  if (contextRef.current.state === 'suspended') {
+    await contextRef.current.resume();
+  }
+  return true;
+}
+
+function playCueTone(context: AudioContext) {
+  const oscillator = context.createOscillator();
+  const gainNode = context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.value = 880;
+  gainNode.gain.value = 0.0001;
+  oscillator.connect(gainNode);
+  gainNode.connect(context.destination);
+  const now = context.currentTime;
+  gainNode.gain.setValueAtTime(0.0001, now);
+  gainNode.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+  oscillator.start(now);
+  oscillator.stop(now + 0.18);
+}
+
 function Metric({ label, value }: { label: string; value: number | null }) {
   const actualValue = value ?? 0;
   const color = actualValue >= 85 ? 'good' : actualValue >= 70 ? 'mid' : 'bad';
@@ -87,12 +115,17 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const poseRef = useRef<PoseLandmarker | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const rafRef = useRef<number | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
+  const readyTimerRef = useRef<number | null>(null);
   const runningRef = useRef(false);
   const speakCooldownRef = useRef(0);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0 });
   const frameCounterRef = useRef(0);
+  const stableCalibrationFramesRef = useRef(0);
+  const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
@@ -112,8 +145,25 @@ export default function App() {
   const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [sessionStopped, setSessionStopped] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
+  const [calibrationConfidence, setCalibrationConfidence] = useState(0);
+  const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
   const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
+  const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
+  const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
+  const feedbackModeRef = useRef(feedbackMode);
+  const audioUnlockedRef = useRef(audioUnlocked);
+  useEffect(() => {
+    feedbackModeRef.current = feedbackMode;
+  }, [feedbackMode]);
+  useEffect(() => {
+    audioUnlockedRef.current = audioUnlocked;
+  }, [audioUnlocked]);
+  useEffect(() => {
+    calibrationStateRef.current = calibrationState;
+  }, [calibrationState]);
 
   const currentSummary = useMemo(() => {
     const totalScore = sessionReps.reduce((sum, rep) => sum + rep.score, 0);
@@ -152,6 +202,92 @@ export default function App() {
       { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
     ];
 
+  const calibrationStatusText =
+    calibrationState === 'countdown'
+      ? `Begin in ${countdownValue ?? 3}`
+      : calibrationState === 'ready'
+        ? 'Ready'
+        : calibrationState === 'counting'
+          ? 'Counting'
+          : 'Calibrating...';
+
+  const neutralCoachText = modeAllowsAudio
+    ? audioUnlocked
+      ? 'Audio cues are unlocked. Keep the phone steady.'
+      : 'Tap Enable sound once to unlock cues on iPhone Safari.'
+    : 'Control mode shows the camera and calibration gate only.';
+
+  useEffect(() => {
+    if (!modeAllowsVisuals) {
+      setCurrentCue(neutralCoachText);
+    }
+  }, [audioUnlocked, calibrationState, modeAllowsVisuals, neutralCoachText]);
+
+  const clearCalibrationTimers = () => {
+    if (countdownTimerRef.current !== null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    if (readyTimerRef.current !== null) {
+      window.clearTimeout(readyTimerRef.current);
+      readyTimerRef.current = null;
+    }
+  };
+
+  const resetCalibrationFlow = () => {
+    clearCalibrationTimers();
+    stableCalibrationFramesRef.current = 0;
+    setCalibrationState('checking');
+    setCalibrationConfidence(0);
+    setCountdownValue(null);
+  };
+
+  const beginCountdown = () => {
+    if (calibrationState === 'counting' || countdownTimerRef.current !== null) return;
+    clearCalibrationTimers();
+    setCalibrationState('countdown');
+    setCountdownValue(3);
+    setCurrentCue('Begin in 3');
+    let countdown = 3;
+    countdownTimerRef.current = window.setInterval(() => {
+      countdown -= 1;
+      if (countdown > 0) {
+        setCountdownValue(countdown);
+        setCurrentCue(`Begin in ${countdown}`);
+        return;
+      }
+
+      clearCalibrationTimers();
+      setCountdownValue(null);
+      setCalibrationState('counting');
+      repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0 };
+      repAccumulatorRef.current = createEmptyRepAccumulator();
+      pushLog('info', 'Calibration complete. Counting started.');
+      setCurrentCue('Begin now.');
+      const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+      if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
+        playCueTone(audioContextRef.current);
+        speak('Begin now.');
+      }
+    }, 1000);
+  };
+
+  const unlockSound = async () => {
+    const unlocked = await unlockAudioContext(audioContextRef);
+    setAudioUnlocked(unlocked);
+    if (unlocked) {
+      pushLog('info', 'Sound unlocked for iPhone Safari.');
+    }
+  };
+
+  const isCalibrationReady = (frame: PoseAnalysis) => {
+    if (frame.confidence < 0.68 || frame.framingScore < 72 || frame.setupHint) return false;
+    if (cameraView === 'head-on') {
+      return frame.headAlignmentScore >= 60 && frame.handStackScore >= 60;
+    }
+    return frame.hipSagScore !== null && frame.hipPikeScore !== null && frame.handStackScore >= 60;
+  };
+
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
     setSessionLogs((current) => [
       {
@@ -166,28 +302,59 @@ export default function App() {
   };
 
   const renderAnalysisCue = (cue: string) => {
-    setCurrentCue(cue);
     pushLog('cue', cue);
-    if (feedbackMode === 'audio' || feedbackMode === 'combined') {
-      const now = Date.now();
-      if (now - speakCooldownRef.current > 1800) {
-        speakCooldownRef.current = now;
-        speak(cue);
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+    if (!currentModeAllowsAudio || !audioUnlockedRef.current) {
+      return;
+    }
+    const now = Date.now();
+    if (now - speakCooldownRef.current > 1800) {
+      speakCooldownRef.current = now;
+      if (audioContextRef.current) {
+        void audioContextRef.current.resume();
+        playCueTone(audioContextRef.current);
       }
+      speak(cue);
     }
   };
 
   const processAnalysis = (frame: PoseAnalysis) => {
     setAnalysis(frame);
     if (frame.confidence < MIN_SIGNAL) {
+      setCalibrationConfidence(Math.round(frame.confidence * 100));
       setCurrentCue(frame.setupHint ?? 'Move the full body into frame.');
       return;
     }
+
+    setCalibrationConfidence(Math.round(frame.confidence * 100));
+    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+
+    if (calibrationStateRef.current !== 'counting') {
+      if (isCalibrationReady(frame)) {
+        stableCalibrationFramesRef.current += 1;
+        if (stableCalibrationFramesRef.current >= 6 && calibrationStateRef.current === 'checking') {
+          setCalibrationState('ready');
+          setCurrentCue('Ready');
+        }
+      } else {
+        stableCalibrationFramesRef.current = 0;
+        if (calibrationStateRef.current !== 'countdown') {
+          setCalibrationState('checking');
+          setCountdownValue(null);
+          setCurrentCue(frame.setupHint ?? 'Calibrating camera view...');
+        }
+      }
+      return;
+    }
+
     const cue = frame.notes[0] ?? (frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
-    if (frame.notes.length && (feedbackMode === 'visual' || feedbackMode === 'combined')) {
+    if (currentModeAllowsVisuals) {
       setCurrentCue(cue);
+    } else if (currentModeAllowsAudio) {
+      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Enable sound for audio cues.');
     } else {
-      setCurrentCue(cue);
+      setCurrentCue('Control mode: camera only.');
     }
     if (frame.notes.length) renderAnalysisCue(cue);
     updateRepState(frame);
@@ -204,6 +371,7 @@ export default function App() {
   };
 
   const updateRepState = (frame: PoseAnalysis) => {
+    if (calibrationStateRef.current !== 'counting') return;
     const { elbowAngle, overallScore, confidence } = frame;
     const now = Date.now();
     if (confidence < MIN_SIGNAL) return;
@@ -300,6 +468,8 @@ export default function App() {
     setCameraStatus('loading');
     setCameraError('');
     stopCamera();
+    resetCalibrationFlow();
+    void unlockSound();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -324,7 +494,7 @@ export default function App() {
         if (videoEl.readyState >= 2) {
           const result = poseRef.current.detectForVideo(videoEl, performance.now());
           const landmarks = result.landmarks[0] as PosePoint[] | undefined;
-          drawSkeleton(landmarks);
+          drawSkeleton(modeAllowsVisuals ? landmarks : null);
           const frame = analyzePose(landmarks, cameraView);
           processAnalysis(frame);
         }
@@ -342,6 +512,11 @@ export default function App() {
 
   const stopCamera = () => {
     runningRef.current = false;
+    clearCalibrationTimers();
+    setCalibrationState('idle');
+    setCountdownValue(null);
+    setCalibrationConfidence(0);
+    stableCalibrationFramesRef.current = 0;
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -358,6 +533,8 @@ export default function App() {
 
   const startDemoLoop = () => {
     stopCamera();
+    resetCalibrationFlow();
+    void unlockSound();
     setCameraStatus('live');
     setSessionStartedAt((current) => current ?? nowIso());
     pushLog('system', 'Demo mode running.');
@@ -366,7 +543,7 @@ export default function App() {
       if (!runningRef.current) return;
       frameCounterRef.current += 1;
       const landmarks = createDemoPose(frameCounterRef.current, cameraView);
-      drawSkeleton(landmarks);
+      drawSkeleton(modeAllowsVisuals ? landmarks : null);
       const frame = analyzePose(landmarks, cameraView);
       processAnalysis(frame);
       rafRef.current = requestAnimationFrame(loop);
@@ -406,6 +583,8 @@ export default function App() {
     setCurrentCue('');
     setSessionStartedAt(null);
     setSessionStopped(false);
+    setAudioUnlocked(false);
+    setCurrentCue('');
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0 };
     frameCounterRef.current = 0;
@@ -459,6 +638,31 @@ export default function App() {
   useEffect(() => {
     setSecureContext(window.isSecureContext);
   }, []);
+
+  useEffect(() => {
+    if (calibrationState !== 'ready') {
+      if (readyTimerRef.current !== null) {
+        window.clearTimeout(readyTimerRef.current);
+        readyTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (readyTimerRef.current !== null) return;
+
+    readyTimerRef.current = window.setTimeout(() => {
+      readyTimerRef.current = null;
+      beginCountdown();
+    }, 500);
+
+    return () => {
+      if (readyTimerRef.current !== null) {
+        window.clearTimeout(readyTimerRef.current);
+        readyTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calibrationState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -576,6 +780,12 @@ export default function App() {
               <span>{cameraView}</span>
               <span>{feedbackMode}</span>
             </div>
+            <div className="calibration-overlay">
+              <span className={calibrationState === 'countdown' || calibrationState === 'counting' ? 'calibration-overlay__badge calibration-overlay__badge--ready' : 'calibration-overlay__badge'}>
+                {calibrationStatusText}
+              </span>
+              <span className="calibration-overlay__meter">{`${Math.round(calibrationConfidence)}% confidence`}</span>
+            </div>
           </div>
 
           <div className="controls card">
@@ -642,41 +852,73 @@ export default function App() {
               <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
                 Export CSV
               </button>
+              {modeAllowsAudio && !audioUnlocked ? (
+                <button className="button button--primary" onClick={() => void unlockSound()}>
+                  Enable sound
+                </button>
+              ) : null}
             </div>
+            {modeAllowsAudio && !audioUnlocked ? <p className="setup-copy">iPhone Safari may need one tap to unlock audio cues.</p> : null}
           </div>
         </div>
 
         <div className="insights">
           <article className="card score-card">
-            <div className="score-grid">
-              <div>
-                <span className="muted">Overall</span>
-                <strong>{analysis ? `${analysis.overallScore}` : '—'}</strong>
-              </div>
-              <div>
-                <span className="muted">Quality</span>
-                <strong>{currentSummary.quality}</strong>
-              </div>
-              <div>
-                <span className="muted">Confidence</span>
-                <strong>{analysis ? `${Math.round(analysis.confidence * 100)}%` : '—'}</strong>
-              </div>
-              <div>
-                <span className="muted">Pose</span>
-                <strong>{analysis?.phase ?? 'idle'}</strong>
-              </div>
-            </div>
+            {modeAllowsVisuals ? (
+              <>
+                <div className="score-grid">
+                  <div>
+                    <span className="muted">Overall</span>
+                    <strong>{analysis ? `${analysis.overallScore}` : '—'}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Quality</span>
+                    <strong>{currentSummary.quality}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Confidence</span>
+                    <strong>{analysis ? `${Math.round(analysis.confidence * 100)}%` : '—'}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Pose</span>
+                    <strong>{analysis?.phase ?? 'idle'}</strong>
+                  </div>
+                </div>
 
-            <div className="metrics">
-              {metricDefinitions.map((metric) => (
-                <Metric key={metric.label} label={metric.label} value={metric.value} />
-              ))}
-            </div>
-            <p className="metric-copy">
-              {cameraView === 'head-on'
-                ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Hip sag/pike is intentionally softened here.'
-                : 'Side view keeps the classic hip sag / hip pike body-line cues, but it needs more room and a wider setup.'}
-            </p>
+                <div className="metrics">
+                  {metricDefinitions.map((metric) => (
+                    <Metric key={metric.label} label={metric.label} value={metric.value} />
+                  ))}
+                </div>
+                <p className="metric-copy">
+                  {cameraView === 'head-on'
+                    ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Hip sag/pike is intentionally softened here.'
+                    : 'Side view keeps the classic hip sag / hip pike body-line cues, but it needs more room and a wider setup.'}
+                </p>
+              </>
+            ) : (
+              <div className="calibration-panel">
+                <div className="score-grid">
+                  <div>
+                    <span className="muted">Status</span>
+                    <strong>{calibrationStatusText}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Frame confidence</span>
+                    <strong>{`${Math.round(calibrationConfidence)}%`}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">View</span>
+                    <strong>{cameraView}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Audio</span>
+                    <strong>{modeAllowsAudio ? (audioUnlocked ? 'unlocked' : 'locked') : 'off'}</strong>
+                  </div>
+                </div>
+                <div className="metric-copy">{neutralCoachText}</div>
+              </div>
+            )}
           </article>
 
           <article className="card coaching-card">
@@ -698,9 +940,19 @@ export default function App() {
                 <strong className={clamp(beforeAfter.delta, -999, 999) >= 0 ? 'positive' : 'negative'}>{beforeAfter.delta >= 0 ? '+' : ''}{beforeAfter.delta}</strong>
               </div>
             </div>
-            <p className="cue">{currentCue || 'Start a set to unlock feedback and comparisons.'}</p>
+            <p className="cue">
+              {modeAllowsVisuals
+                ? currentCue || 'Start a set to unlock feedback and comparisons.'
+                : neutralCoachText}
+            </p>
             <ul className="notes">
-              {(analysis?.notes.length ? analysis.notes : ['Keep the body in frame.', 'Use the back camera if the shoulders and feet are visible.', 'Run the phone in a secure context for camera access.']).slice(0, 3).map((note) => (
+              {(modeAllowsVisuals && analysis?.notes.length
+                ? analysis.notes
+                : [
+                    calibrationStatusText,
+                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Enable sound once before the first audio cue on iPhone Safari.') : 'No visual coaching in Control mode.',
+                    cameraView === 'head-on' ? 'Head-on is the recommended mobile demo.' : 'Side view is optional and needs a wider tripod setup.',
+                  ]).slice(0, 3).map((note) => (
                 <li key={note}>{note}</li>
               ))}
             </ul>
