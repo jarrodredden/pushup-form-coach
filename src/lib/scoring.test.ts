@@ -36,9 +36,15 @@ describe('push-up scoring', () => {
   });
 
   it('keeps head-on setup hints focused on hands and torso', () => {
-    const headOn = analyzePose(makeBadPose(), 'head-on');
-    expect(headOn.setupHint?.toLowerCase()).not.toContain('feet');
-    expect(headOn.setupHint?.toLowerCase()).toContain('hands');
+    const points = makeGoodPose();
+    points[11].visibility = 0.1;
+    points[12].visibility = 0.1;
+    points[15].visibility = 0.1;
+    points[16].visibility = 0.1;
+    const headOn = analyzePose(points, 'head-on');
+    const hint = headOn.setupHint?.toLowerCase() ?? '';
+    expect(hint).not.toContain('feet');
+    expect(hint).toContain('hands');
   });
 
   it('finalizes a rep from accumulated samples', () => {

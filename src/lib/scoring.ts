@@ -147,6 +147,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     ? scoreLine(Math.abs(nose.x - shoulderMid.x) / shoulderWidth, 220)
     : 55;
   const framingHintText = framingHint(landmarks, viewMode);
+  const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
   const framingScore = Math.round(
     clamp(
       (averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 0.55 + averageVisibility(landmarks, [LEFT.ankle, RIGHT.ankle]) * 0.45) * 100,
@@ -220,8 +221,6 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       notes,
     };
   }
-
-  const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
 
   return {
     viewMode,
