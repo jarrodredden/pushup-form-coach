@@ -253,16 +253,16 @@ export default function App() {
   const calibrationChecklist = analysis
     ? cameraView === 'head-on'
       ? [
-          { label: 'Confidence', ok: analysis.confidence >= 0.73, detail: `${Math.round(analysis.confidence * 100)}%` },
-          { label: 'Wrists + feet in frame', ok: analysis.framingScore >= 68, detail: `${analysis.framingScore}%` },
-          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
-          { label: 'Head centered', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%` },
+          { label: 'Confidence (required)', ok: analysis.confidence >= 0.72, detail: `${Math.round(analysis.confidence * 100)}%` },
+          { label: 'Wrists + feet in frame (required)', ok: analysis.framingScore >= 64, detail: `${analysis.framingScore}%` },
+          { label: 'Hands under shoulders (coach)', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
+          { label: 'Head centered (coach)', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%` },
         ]
       : [
-          { label: 'Confidence', ok: analysis.confidence >= 0.7, detail: `${Math.round(analysis.confidence * 100)}%` },
-          { label: 'Full body in frame', ok: analysis.framingScore >= 66, detail: `${analysis.framingScore}%` },
-          { label: 'Side line visible', ok: analysis.hipSagScore !== null && analysis.hipPikeScore !== null, detail: 'side-view' },
-          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
+          { label: 'Confidence (required)', ok: analysis.confidence >= 0.7, detail: `${Math.round(analysis.confidence * 100)}%` },
+          { label: 'Full body in frame (required)', ok: analysis.framingScore >= 62, detail: `${analysis.framingScore}%` },
+          { label: 'Hip line visible (coach)', ok: analysis.hipSagScore !== null && analysis.hipPikeScore !== null, detail: 'side-view' },
+          { label: 'Hands under shoulders (coach)', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
         ]
     : [];
 
@@ -337,9 +337,9 @@ export default function App() {
 
   const isCalibrationReady = (frame: PoseAnalysis) => {
     if (cameraView === 'head-on') {
-      return frame.confidence >= 0.73 && frame.framingScore >= 68 && frame.handStackScore >= 50 && frame.headAlignmentScore >= 50;
+      return frame.confidence >= 0.72 && frame.framingScore >= 64;
     }
-    return frame.confidence >= 0.7 && frame.framingScore >= 66 && frame.hipSagScore !== null && frame.hipPikeScore !== null && frame.handStackScore >= 50;
+    return frame.confidence >= 0.7 && frame.framingScore >= 62;
   };
 
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
@@ -387,7 +387,7 @@ export default function App() {
     if (calibrationStateRef.current !== 'counting') {
       if (isCalibrationReady(frame)) {
         stableCalibrationFramesRef.current += 1;
-        if (stableCalibrationFramesRef.current >= 4 && calibrationStateRef.current === 'checking') {
+        if (stableCalibrationFramesRef.current >= 3 && calibrationStateRef.current === 'checking') {
           setCalibrationState('ready');
           setCurrentCue('Ready');
         }
