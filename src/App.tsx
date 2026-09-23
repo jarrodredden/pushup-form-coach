@@ -59,8 +59,45 @@ const qualityLabel = (value: number) => {
 };
 const nowIso = () => new Date().toISOString();
 
+let speechBusy = false;
+let speechCurrent = '';
+const speechQueue: string[] = [];
+const SPEECH_QUEUE_LIMIT = 10;
+let speechVoice: SpeechSynthesisVoice | null = null;
+let speechVoiceListenerInstalled = false;
+
+function scoreVoice(voice: SpeechSynthesisVoice) {
+  const name = `${voice.name} ${voice.voiceURI}`.toLowerCase();
+  let score = 0;
+  if (voice.lang.toLowerCase() === 'en-us') score += 100;
+  else if (voice.lang.toLowerCase().startsWith('en-')) score += 60;
+  if (/enhanced|premium|siri|neural|natural/.test(name)) score += 40;
+  if (/google.*us english|google us english/.test(name)) score += 35;
+  if (/us english/.test(name)) score += 15;
+  if (voice.default) score += 10;
+  return score;
+}
+
+function refreshSpeechVoice() {
+  if (!('speechSynthesis' in window)) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return;
+  const ranked = voices
+    .slice()
+    .sort((a, b) => scoreVoice(b) - scoreVoice(a));
+  speechVoice = ranked[0] ?? null;
+}
+
+function ensureSpeechVoiceListener() {
+  if (speechVoiceListenerInstalled || !('speechSynthesis' in window)) return;
+  speechVoiceListenerInstalled = true;
+  window.speechSynthesis.addEventListener('voiceschanged', refreshSpeechVoice);
+  refreshSpeechVoice();
+}
+
 function speak(message: string) {
   if (!('speechSynthesis' in window)) return;
+  ensureSpeechVoiceListener();
   const normalized = message.trim();
   if (!normalized) return;
   const lastQueued = speechQueue[speechQueue.length - 1];
@@ -78,9 +115,11 @@ function speak(message: string) {
     speechBusy = true;
     speechCurrent = next;
     const utterance = new SpeechSynthesisUtterance(next);
-    utterance.rate = 1.02;
-    utterance.pitch = 1.02;
-    utterance.lang = 'en-US';
+    const voice = speechVoice ?? window.speechSynthesis.getVoices().slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0] ?? null;
+    if (voice) utterance.voice = voice;
+    utterance.lang = voice?.lang ?? 'en-US';
+    utterance.rate = 0.98;
+    utterance.pitch = 1;
     utterance.onend = () => {
       speechBusy = false;
       speechCurrent = '';
@@ -126,11 +165,6 @@ const repEncouragements = {
   mid: ['Good job — keep that body line tight.', 'Nice rep — stay strong and steady.', 'Good work — keep that plank tight.'],
   high: ['Great work — keep that depth.', 'Awesome rep — stay tight.', 'Great rep — strong and clean.'],
 };
-
-let speechBusy = false;
-let speechCurrent = '';
-const speechQueue: string[] = [];
-const SPEECH_QUEUE_LIMIT = 10;
 
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
