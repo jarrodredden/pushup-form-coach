@@ -94,6 +94,12 @@ function shortenCue(message: string) {
   return words.length > 8 ? `${words.slice(0, 8).join(' ')}…` : normalized;
 }
 
+const repEncouragements = {
+  low: ['You can do better — keep going.', 'Build that rep a little more.', 'Try for more depth next time.'],
+  mid: ['Good job — keep that body line tight.', 'Nice rep — stay strong and steady.', 'Good work — keep that plank tight.'],
+  high: ['Great work — keep that depth.', 'Awesome rep — stay tight.', 'Great rep — strong and clean.'],
+};
+
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextCtor) return false;
@@ -207,6 +213,7 @@ export default function App() {
   const feedbackModeRef = useRef(feedbackMode);
   const audioUnlockedRef = useRef(audioUnlocked);
   const spokenCoachingEnabledRef = useRef(spokenCoachingEnabled);
+  const repEncouragementTickRef = useRef(0);
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
   }, [feedbackMode]);
@@ -638,7 +645,15 @@ export default function App() {
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
-      speak(String(nextRepIndex));
+      if (spokenCoachingEnabledRef.current) {
+        const band = rep.score < 50 ? 'low' : rep.score <= 65 ? 'mid' : 'high';
+        const phrasePool = repEncouragements[band];
+        const phrase = phrasePool[repEncouragementTickRef.current % phrasePool.length];
+        repEncouragementTickRef.current += 1;
+        speak(`Rep ${nextRepIndex}. Score ${rep.score}. ${phrase}`);
+      } else {
+        speak(String(nextRepIndex));
+      }
     }
     repAccumulatorRef.current = createEmptyRepAccumulator();
   };
@@ -864,6 +879,7 @@ export default function App() {
     setAudioUnlocked(false);
     setCurrentCue('');
     repCounterRef.current.reset();
+    repEncouragementTickRef.current = 0;
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
     frameCounterRef.current = 0;
