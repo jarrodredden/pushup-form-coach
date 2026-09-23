@@ -96,6 +96,24 @@ function ensureSpeechVoiceListener() {
   refreshSpeechVoice();
 }
 
+function primeSpeechOnGesture(message: string) {
+  if (!('speechSynthesis' in window)) return;
+  const normalized = message.trim();
+  if (!normalized) return;
+  try {
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
+    const utterance = new SpeechSynthesisUtterance(normalized);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.98;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    // If the priming speak fails, the queued path will still retry later.
+  }
+}
+
 function speak(message: string) {
   if (!('speechSynthesis' in window)) return;
   ensureSpeechVoiceListener();
@@ -160,6 +178,9 @@ function speak(message: string) {
       }
     }, 4500);
     try {
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
       window.speechSynthesis.speak(utterance);
     } catch {
       recover(next);
@@ -493,6 +514,7 @@ export default function App() {
   };
 
   const unlockSound = async () => {
+    primeSpeechOnGesture('Ready');
     const unlocked = await unlockAudioContext(audioContextRef);
     setAudioUnlocked(unlocked);
     if (unlocked && modeAllowsAudio) {
@@ -500,7 +522,6 @@ export default function App() {
       if (audioContextRef.current) {
         playCueTone(audioContextRef.current);
       }
-      speak('Ready');
     }
   };
 
@@ -1025,11 +1046,6 @@ export default function App() {
     }
 
     if (readyTimerRef.current !== null) return;
-
-    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-    if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
-      speak('Ready');
-    }
 
     readyTimerRef.current = window.setTimeout(() => {
       readyTimerRef.current = null;
