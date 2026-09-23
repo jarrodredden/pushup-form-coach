@@ -500,7 +500,7 @@ export default function App() {
     }
 
     if (frame.viewMode === 'head-on') {
-      if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
+      if (frame.elbowDepthScore < 55) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
       if (frame.bodyLineScore < 74) issues.push({ key: 'hips', cue: 'Keep the hips lower and the body straighter.' });
       if (frame.elbowFlareScore < 68) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
       if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
@@ -508,7 +508,7 @@ export default function App() {
       return issues;
     }
 
-    if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
+    if (frame.elbowDepthScore < 58) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
     if (frame.bodyLineScore < 74 || (frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72) issues.push({ key: 'hips', cue: 'Keep the hips level and the body straighter.' });
     if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
     if (frame.elbowFlareScore < 70) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
