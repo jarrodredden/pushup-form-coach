@@ -61,12 +61,40 @@ const nowIso = () => new Date().toISOString();
 
 function speak(message: string) {
   if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(message);
-  utterance.rate = 1.02;
-  utterance.pitch = 1.02;
-  utterance.lang = 'en-US';
-  window.speechSynthesis.speak(utterance);
+  const normalized = message.trim();
+  if (!normalized) return;
+  if (normalized === speechLastText || normalized === speechQueued) return;
+  const speakNow = (text: string) => {
+    speechBusy = true;
+    speechLastText = text;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.02;
+    utterance.pitch = 1.02;
+    utterance.lang = 'en-US';
+    utterance.onend = () => {
+      speechBusy = false;
+      const next = speechQueued;
+      speechQueued = '';
+      if (next && next !== text) {
+        speak(next);
+      }
+    };
+    utterance.onerror = () => {
+      speechBusy = false;
+      const next = speechQueued;
+      speechQueued = '';
+      if (next && next !== text) {
+        speak(next);
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+  if (speechBusy) {
+    speechQueued = normalized;
+    return;
+  }
+  speakNow(normalized);
 }
 
 function shortenCue(message: string) {
@@ -98,6 +126,10 @@ const repEncouragements = {
   mid: ['Good job — keep that body line tight.', 'Nice rep — stay strong and steady.', 'Good work — keep that plank tight.'],
   high: ['Great work — keep that depth.', 'Awesome rep — stay tight.', 'Great rep — strong and clean.'],
 };
+
+let speechBusy = false;
+let speechQueued = '';
+let speechLastText = '';
 
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -170,6 +202,7 @@ export default function App() {
   const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
   const cueLastTextRef = useRef('');
   const cueLastEmittedAtRef = useRef(0);
+  const repSpeechLockUntilRef = useRef(0);
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
@@ -554,7 +587,7 @@ export default function App() {
       setCurrentCue(shortCue);
     }
 
-    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current) {
+    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current || Date.now() < repSpeechLockUntilRef.current) {
       return;
     }
 
@@ -640,12 +673,13 @@ export default function App() {
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
+      repSpeechLockUntilRef.current = Date.now() + 1800;
       if (spokenCoachingEnabledRef.current) {
         const band = rep.score < 50 ? 'low' : rep.score <= 65 ? 'mid' : 'high';
         const phrasePool = repEncouragements[band];
         const phrase = phrasePool[repEncouragementTickRef.current % phrasePool.length];
         repEncouragementTickRef.current += 1;
-        speak(`Rep ${nextRepIndex}. Score ${rep.score}. ${phrase}`);
+        speak(`Rep ${nextRepIndex}, score ${rep.score}. ${phrase}`);
       } else {
         speak(String(nextRepIndex));
       }
