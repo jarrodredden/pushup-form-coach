@@ -63,38 +63,38 @@ function speak(message: string) {
   if (!('speechSynthesis' in window)) return;
   const normalized = message.trim();
   if (!normalized) return;
-  if (normalized === speechLastText || normalized === speechQueued) return;
-  const speakNow = (text: string) => {
+  const lastQueued = speechQueue[speechQueue.length - 1];
+  if (normalized === speechCurrent || normalized === lastQueued) return;
+  if (speechQueue.length >= SPEECH_QUEUE_LIMIT) {
+    speechQueue.shift();
+  }
+  speechQueue.push(normalized);
+  if (speechBusy) return;
+
+  const speakNext = () => {
+    if (speechBusy) return;
+    const next = speechQueue.shift();
+    if (!next) return;
     speechBusy = true;
-    speechLastText = text;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    speechCurrent = next;
+    const utterance = new SpeechSynthesisUtterance(next);
     utterance.rate = 1.02;
     utterance.pitch = 1.02;
     utterance.lang = 'en-US';
     utterance.onend = () => {
       speechBusy = false;
-      const next = speechQueued;
-      speechQueued = '';
-      if (next && next !== text) {
-        speak(next);
-      }
+      speechCurrent = '';
+      speakNext();
     };
     utterance.onerror = () => {
       speechBusy = false;
-      const next = speechQueued;
-      speechQueued = '';
-      if (next && next !== text) {
-        speak(next);
-      }
+      speechCurrent = '';
+      speakNext();
     };
     window.speechSynthesis.speak(utterance);
   };
-  if (speechBusy) {
-    speechQueued = normalized;
-    return;
-  }
-  speakNow(normalized);
+
+  speakNext();
 }
 
 function shortenCue(message: string) {
@@ -128,8 +128,9 @@ const repEncouragements = {
 };
 
 let speechBusy = false;
-let speechQueued = '';
-let speechLastText = '';
+let speechCurrent = '';
+const speechQueue: string[] = [];
+const SPEECH_QUEUE_LIMIT = 10;
 
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
