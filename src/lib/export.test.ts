@@ -29,6 +29,7 @@ describe('notes export', () => {
         dateIso: '2026-09-23T02:18:00.000Z',
         mode: 'combined',
         cameraView: 'head-on',
+        spokenCoachingEnabled: false,
         reps: 4,
         averageScore: 78,
         bestScore: 86,

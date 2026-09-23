@@ -5,6 +5,7 @@ export interface NotesExportSummary {
   dateIso: string;
   mode: FeedbackMode;
   cameraView: CameraViewMode;
+  spokenCoachingEnabled: boolean;
   reps: number;
   averageScore: number;
   bestScore: number;
@@ -137,6 +138,7 @@ export function buildNotesExport(summary: NotesExportSummary, reps: SessionRep[]
     `Date: ${dateLabel}`,
     `Mode: ${summary.mode}`,
     `View: ${summary.cameraView}`,
+    `Spoken coaching: ${summary.spokenCoachingEnabled ? 'on' : 'off'}`,
     `Total reps: ${summary.reps}`,
     `Average score: ${summary.averageScore}/100`,
     `Best score: ${summary.bestScore}/100`,

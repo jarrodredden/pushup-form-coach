@@ -85,7 +85,7 @@ function shortenCue(message: string) {
     [/^clean head-on rep.*$/i, 'Good rep'],
     [/^clean side-view rep.*$/i, 'Good rep'],
     [/^audio cues are unlocked.*$/i, 'Audio unlocked'],
-    [/^tap enable sound.*$/i, 'Tap Enable sound'],
+    [/^tap enable sound.*$/i, 'Tap Start sound'],
   ];
   for (const [pattern, replacement] of replacements) {
     if (pattern.test(normalized)) return replacement;
@@ -180,6 +180,7 @@ export default function App() {
   const [reps, setReps] = useState(0);
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
+  const [spokenCoachingEnabled, setSpokenCoachingEnabled] = useState(false);
   const [history, setHistory] = useState<SessionEntry[]>(() => {
     const stored = loadHistory(SESSION_STORAGE_KEY);
     if (stored.length) return stored;
@@ -205,6 +206,7 @@ export default function App() {
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
   const feedbackModeRef = useRef(feedbackMode);
   const audioUnlockedRef = useRef(audioUnlocked);
+  const spokenCoachingEnabledRef = useRef(spokenCoachingEnabled);
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
   }, [feedbackMode]);
@@ -212,11 +214,11 @@ export default function App() {
     audioUnlockedRef.current = audioUnlocked;
   }, [audioUnlocked]);
   useEffect(() => {
+    spokenCoachingEnabledRef.current = spokenCoachingEnabled;
+  }, [spokenCoachingEnabled]);
+  useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
-  useEffect(() => {
-    repCounterRef.current.current = reps;
-  }, [reps]);
   useEffect(() => {
     if (calibrationState !== 'checking') {
       if (checkingTimerRef.current !== null) {
@@ -425,6 +427,7 @@ export default function App() {
     bestScore: currentSummary.bestScore,
     beforeScore: beforeAfter.before,
     afterScore: beforeAfter.after,
+    spokenCoachingEnabled,
     notes: [...new Set([...sessionReps.flatMap((rep) => rep.notes), ...(analysis?.notes ?? [])])].slice(0, 8),
   });
 
@@ -549,7 +552,7 @@ export default function App() {
       setCurrentCue(shortCue);
     }
 
-    if (!currentModeAllowsAudio || !audioUnlockedRef.current) {
+    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current) {
       return;
     }
 
@@ -619,7 +622,7 @@ export default function App() {
       updateCoachingFocus(frame);
     }
     if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
-      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Enable sound for audio cues.');
+      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Start sound for audio cues.');
     } else if (!currentModeAllowsVisuals) {
       setCurrentCue('Control mode: camera only.');
     }
@@ -898,6 +901,7 @@ export default function App() {
         ...summary,
         mode: feedbackMode,
         cameraView,
+        spokenCoachingEnabled,
       }, sessionReps),
       'text/markdown',
     );
@@ -1122,6 +1126,12 @@ export default function App() {
                   {audioUnlocked ? 'Sound ready' : 'Start sound'}
                 </button>
               ) : null}
+              <button
+                className={spokenCoachingEnabled ? 'button button--active' : 'button'}
+                onClick={() => setSpokenCoachingEnabled((value) => !value)}
+              >
+                {spokenCoachingEnabled ? 'Form coaching (spoken): on' : 'Form coaching (spoken): off'}
+              </button>
               <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
                 Start camera
               </button>
