@@ -43,10 +43,11 @@ function buildHeadOnNotes(metrics: {
 }) {
   const notes: string[] = [];
   if (metrics.setupHint) notes.push(metrics.setupHint);
-  if (metrics.elbowDepthScore < 72) notes.push('Lower a little deeper at the bottom of the rep.');
-  if (metrics.elbowFlareScore < 74) notes.push('Tuck the elbows in a bit more from the front view.');
+  // Front-view coaching is intentionally softer so depth and flare stay achievable on a phone camera.
+  if (metrics.elbowDepthScore < 68) notes.push('Lower a little deeper at the bottom of the rep.');
+  if (metrics.elbowFlareScore < 68) notes.push('Tuck the elbows in a bit more from the front view.');
   if (metrics.handStackScore < 74) notes.push('Stack the hands under the shoulders.');
-  if (metrics.headAlignmentScore < 74) notes.push('Keep the head centered between the shoulders.');
+  if (metrics.headAlignmentScore < 72) notes.push('Keep the head centered between the shoulders.');
   if (metrics.framingScore < 70 && !metrics.setupHint) notes.push('Back up or lower the phone until hands, torso, and head stay in frame.');
   if (!notes.length) notes.push('Clean head-on rep.');
   return notes;

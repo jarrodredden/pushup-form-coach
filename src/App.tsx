@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { createDemoPose } from './lib/demo';
-import { buildCsv, downloadTextFile, exportSessionJson } from './lib/export';
+import { buildCsv, buildNotesExport, downloadTextFile, exportSessionJson } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
@@ -46,6 +46,8 @@ const feedbackOptions: { label: string; value: FeedbackMode }[] = [
   { label: 'Audio', value: 'audio' },
   { label: 'Combined', value: 'combined' },
 ];
+
+type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const qualityLabel = (value: number) => {
@@ -150,6 +152,11 @@ export default function App() {
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
+  const coachingFocusRef = useRef<{ key: CoachingIssueKey | null; resolvedAt: number | null; cue: string }>({
+    key: null,
+    resolvedAt: null,
+    cue: '',
+  });
   const frameCounterRef = useRef(0);
   const stableCalibrationFramesRef = useRef(0);
   const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
@@ -387,6 +394,107 @@ export default function App() {
     return null;
   };
 
+  const buildSessionSummary = () => ({
+    id: `${Date.now()}`,
+    name: athleteName.trim() || 'Anonymous',
+    dateIso: sessionStartedAt ?? nowIso(),
+    reps,
+    averageScore: currentSummary.averageScore,
+    bestScore: currentSummary.bestScore,
+    beforeScore: beforeAfter.before,
+    afterScore: beforeAfter.after,
+    notes: [...new Set([...sessionReps.flatMap((rep) => rep.notes), ...(analysis?.notes ?? [])])].slice(0, 8),
+  });
+
+  const buildSessionEntry = (): SessionEntry => {
+    const summary = buildSessionSummary();
+    return {
+      id: summary.id,
+      name: summary.name,
+      createdAt: summary.dateIso,
+      reps: summary.reps,
+      averageScore: summary.averageScore,
+      bestScore: summary.bestScore,
+      beforeScore: summary.beforeScore,
+      afterScore: summary.afterScore,
+      mode: feedbackMode,
+      cameraFacing,
+      cameraView,
+      demoMode,
+      notes: summary.notes,
+    };
+  };
+
+  const buildCoachingIssues = (frame: PoseAnalysis) => {
+    const issues: Array<{ key: CoachingIssueKey; cue: string }> = [];
+    const setupCue = frame.setupHint ?? 'Move back so hands, torso, and head stay in frame.';
+    const setupNeeded =
+      frame.viewMode === 'head-on'
+        ? frame.confidence < 0.72 || frame.framingScore < 64 || frame.handStackScore < 72
+        : frame.confidence < 0.7 || frame.framingScore < 62 || frame.handStackScore < 72;
+    if (setupNeeded) {
+      issues.push({ key: 'setup', cue: setupCue });
+      return issues;
+    }
+
+    if (frame.viewMode === 'head-on') {
+      if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
+      if (frame.elbowFlareScore < 68) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
+      if (frame.headAlignmentScore < 70) issues.push({ key: 'headAlignment', cue: 'Keep the head centered.' });
+      if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
+      return issues;
+    }
+
+    if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
+    if ((frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72) issues.push({ key: 'hips', cue: 'Keep the hips level.' });
+    if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
+    if (frame.elbowFlareScore < 70) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
+    return issues;
+  };
+
+  const updateCoachingFocus = (frame: PoseAnalysis) => {
+    const now = Date.now();
+    const issues = buildCoachingIssues(frame);
+    const active = coachingFocusRef.current;
+    const activeIssue = active.key ? issues.find((issue) => issue.key === active.key) : null;
+
+    if (activeIssue) {
+      coachingFocusRef.current = { key: activeIssue.key, resolvedAt: null, cue: activeIssue.cue };
+      renderAnalysisCue(activeIssue.cue);
+      return;
+    }
+
+    if (!active.key) {
+      const nextIssue = issues[0];
+      if (nextIssue) {
+        coachingFocusRef.current = { key: nextIssue.key, resolvedAt: null, cue: nextIssue.cue };
+        renderAnalysisCue(nextIssue.cue);
+      }
+      return;
+    }
+
+    if (active.resolvedAt === null) {
+      coachingFocusRef.current = { ...active, resolvedAt: now };
+      return;
+    }
+
+    if (now - active.resolvedAt < 6000) {
+      return;
+    }
+
+    const nextIssue = issues[0];
+    if (nextIssue) {
+      coachingFocusRef.current = { key: nextIssue.key, resolvedAt: null, cue: nextIssue.cue };
+      renderAnalysisCue(nextIssue.cue);
+      return;
+    }
+
+    coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    if (modeAllowsVisuals) {
+      setCurrentCue('Good rep.');
+    }
+  };
+
   const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
     setSessionLogs((current) => [
       {
@@ -534,9 +642,8 @@ export default function App() {
       return;
     }
 
-    const cue = frame.notes[0] ?? (frame.overallScore >= 80 ? 'Great rep rhythm.' : 'Keep moving smoothly.');
-    if (currentModeAllowsVisuals || currentModeAllowsAudio) {
-      renderAnalysisCue(cue);
+    if (feedbackModeRef.current !== 'control') {
+      updateCoachingFocus(frame);
     }
     if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
       setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Enable sound for audio cues.');
@@ -552,7 +659,6 @@ export default function App() {
     setReps((value) => value + 1);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
-    if (analysisFrame.notes.length) renderAnalysisCue(analysisFrame.notes[0]);
     repAccumulatorRef.current = createEmptyRepAccumulator();
   };
 
@@ -563,12 +669,12 @@ export default function App() {
     if (confidence < MIN_SIGNAL) return;
 
     const state = repStateRef.current;
-    const topThreshold = 160;
-    const downThreshold = 145;
+    const topThreshold = 158;
+    const downThreshold = 120;
 
     if (!state.sawTop) {
       state.topStableFrames = elbowAngle >= topThreshold ? state.topStableFrames + 1 : 0;
-      if (state.topStableFrames >= 2) {
+      if (state.topStableFrames >= 3) {
         state.sawTop = true;
         state.sawBottom = false;
         state.bottomStableFrames = 0;
@@ -596,7 +702,7 @@ export default function App() {
     if (elbowAngle <= downThreshold) {
       state.bottomStableFrames += 1;
       state.topStableFrames = 0;
-      if (state.bottomStableFrames >= 2) {
+      if (state.bottomStableFrames >= 3) {
         state.sawBottom = true;
       }
     } else if (elbowAngle >= topThreshold) {
@@ -607,7 +713,7 @@ export default function App() {
       state.bottomStableFrames = 0;
     }
 
-    if (state.sawBottom && state.topStableFrames >= 2 && now - state.lastRepAt > 450) {
+    if (state.sawBottom && state.topStableFrames >= 3 && now - state.lastRepAt > 550) {
       state.lastRepAt = now;
       state.sawTop = false;
       state.sawBottom = false;
@@ -760,21 +866,6 @@ export default function App() {
     setSessionStopped(true);
     setCameraStatus('idle');
     pushLog('system', 'Session stopped.');
-    if (sessionReps.length > 0) {
-      const summary: SessionSummary = {
-        id: `${Date.now()}`,
-        name: athleteName.trim() || 'Anonymous',
-        dateIso: nowIso(),
-        reps,
-        averageScore: currentSummary.averageScore,
-        bestScore: currentSummary.bestScore,
-        beforeScore: beforeAfter.before,
-        afterScore: beforeAfter.after,
-        notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
-      };
-      downloadTextFile(`pushup-session-${summary.id}.json`, exportSessionJson(summary, sessionReps, sessionLogs, history), 'application/json');
-      downloadTextFile(`pushup-session-${summary.id}.csv`, buildCsv(summary, sessionReps, sessionLogs), 'text/csv');
-    }
   };
 
   const resetSet = () => {
@@ -796,21 +887,7 @@ export default function App() {
 
   const saveCurrentSession = () => {
     if (!sessionReps.length && !analysis) return;
-    const summary: SessionEntry = {
-      id: `${Date.now()}`,
-      name: athleteName.trim() || 'Anonymous',
-      createdAt: sessionStartedAt ?? nowIso(),
-      reps,
-      averageScore: currentSummary.averageScore,
-      bestScore: currentSummary.bestScore,
-      beforeScore: beforeAfter.before,
-      afterScore: beforeAfter.after,
-      mode: feedbackMode,
-      cameraFacing,
-      cameraView,
-      demoMode,
-      notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
-    };
+    const summary: SessionEntry = buildSessionEntry();
     const nextHistory = [summary, ...history].slice(0, 25);
     setHistory(nextHistory);
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
@@ -818,20 +895,30 @@ export default function App() {
     pushLog('system', 'Session saved locally.');
   };
 
+  const exportNotes = () => {
+    if (!sessionReps.length && !analysis) return;
+    const summary = buildSessionSummary();
+    downloadTextFile(
+      `pushup-session-${summary.id}-notes.md`,
+      buildNotesExport({
+        ...summary,
+        mode: feedbackMode,
+        cameraView,
+      }, sessionReps),
+      'text/markdown',
+    );
+  };
+
   const exportCsv = () => {
     if (!sessionReps.length && !analysis) return;
-    const summary: SessionSummary = {
-      id: `${Date.now()}`,
-      name: athleteName.trim() || 'Anonymous',
-      dateIso: sessionStartedAt ?? nowIso(),
-      reps,
-      averageScore: currentSummary.averageScore,
-      bestScore: currentSummary.bestScore,
-      beforeScore: beforeAfter.before,
-      afterScore: beforeAfter.after,
-      notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
-    };
+    const summary: SessionSummary = buildSessionSummary();
     downloadTextFile(`pushup-session-${summary.id}.csv`, buildCsv(summary, sessionReps, sessionLogs), 'text/csv');
+  };
+
+  const exportJson = () => {
+    if (!sessionReps.length && !analysis) return;
+    const summary: SessionSummary = buildSessionSummary();
+    downloadTextFile(`pushup-session-${summary.id}.json`, exportSessionJson(summary, sessionReps, sessionLogs, history), 'application/json');
   };
 
   useEffect(() => {
@@ -1039,7 +1126,7 @@ export default function App() {
                 Start camera
               </button>
               <button className="button" onClick={stopSession} disabled={cameraStatus === 'idle' && !sessionReps.length}>
-                Stop & export
+                Stop session
               </button>
               <button className="button" onClick={() => setDemoMode((value) => !value)}>
                 {demoMode ? 'Exit demo' : 'Demo mode'}
@@ -1050,11 +1137,17 @@ export default function App() {
             </div>
 
             <div className="action-row secondary">
+              <button className="button button--primary" onClick={exportNotes} disabled={!sessionReps.length && !analysis}>
+                Export notes
+              </button>
               <button className="button" onClick={saveCurrentSession} disabled={!sessionReps.length && !analysis}>
                 Save local score
               </button>
               <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
                 Export CSV
+              </button>
+              <button className="button" onClick={exportJson} disabled={!sessionReps.length && !analysis}>
+                Export JSON
               </button>
             </div>
             {modeAllowsAudio ? (
@@ -1122,7 +1215,7 @@ export default function App() {
                 </div>
                 <p className="metric-copy">
                   {cameraView === 'head-on'
-                    ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Hip sag/pike is intentionally softened here.'
+                    ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Depth and elbow flare coach gently and one cue stays active at a time.'
                     : 'Side view keeps the classic hip sag / hip pike body-line cues, but it needs more room and a wider setup.'}
                 </p>
               </>

@@ -1,4 +1,56 @@
-import { LogEntry, SessionRep, SessionSummary } from './types';
+import { CameraViewMode, FeedbackMode, LogEntry, SessionRep, SessionSummary } from './types';
+
+export interface NotesExportSummary {
+  name: string;
+  dateIso: string;
+  mode: FeedbackMode;
+  cameraView: CameraViewMode;
+  reps: number;
+  averageScore: number;
+  bestScore: number;
+  beforeScore: number;
+  afterScore: number;
+  notes: string[];
+}
+
+type ThemeBucket = {
+  label: string;
+  cue: string;
+  patterns: RegExp[];
+};
+
+const THEME_BUCKETS: ThemeBucket[] = [
+  {
+    label: 'Setup / framing',
+    cue: 'Keep hands, torso, and head in frame.',
+    patterns: [/move back/i, /hands?/i, /torso/i, /head/i, /shoulders?/i, /frame/i, /setup/i],
+  },
+  {
+    label: 'Depth',
+    cue: 'Go a little deeper.',
+    patterns: [/deeper/i, /depth/i, /lower/i],
+  },
+  {
+    label: 'Elbow flare',
+    cue: 'Tuck the elbows in.',
+    patterns: [/elbow/i, /flare/i, /tuck/i],
+  },
+  {
+    label: 'Hands stacked',
+    cue: 'Hands under shoulders.',
+    patterns: [/hand/i, /stack/i, /shoulder/i],
+  },
+  {
+    label: 'Head alignment',
+    cue: 'Keep the head centered.',
+    patterns: [/head/i, /center/i, /alignment/i],
+  },
+  {
+    label: 'Hip line',
+    cue: 'Keep the hips level.',
+    patterns: [/hip/i, /sag/i, /pike/i, /body line/i],
+  },
+];
 
 export function downloadTextFile(filename: string, content: string, type: string) {
   const blob = new Blob([content], { type });
@@ -53,4 +105,48 @@ export function buildCsv(summary: SessionSummary, reps: SessionRep[], logs: LogE
     ].join(',')),
   ];
   return lines.join('\n');
+}
+
+function collectThemeBuckets(notes: string[]) {
+  return THEME_BUCKETS.map((bucket) => {
+    const count = notes.reduce((total, note) => total + (bucket.patterns.some((pattern) => pattern.test(note)) ? 1 : 0), 0);
+    return {
+      label: bucket.label,
+      cue: bucket.cue,
+      count,
+    };
+  })
+    .filter((bucket) => bucket.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+export function buildNotesExport(summary: NotesExportSummary, reps: SessionRep[]) {
+  const themes = collectThemeBuckets([...summary.notes, ...reps.flatMap((rep) => rep.notes)]).slice(0, 3);
+  const dateLabel = new Date(summary.dateIso).toLocaleString();
+  const delta = summary.afterScore - summary.beforeScore;
+  const deltaLabel = delta === 0 ? 'No change' : delta > 0 ? `+${delta}` : `${delta}`;
+  const topThemes = themes.length
+    ? themes.map((theme, index) => `${index + 1}. ${theme.label} - ${theme.cue} (${theme.count} cue${theme.count === 1 ? '' : 's'})`)
+    : ['1. No repeated themes yet - the set stayed balanced or too short for pattern repeats.'];
+
+  return [
+    '# Push-up session notes',
+    '',
+    `Athlete: ${summary.name}`,
+    `Date: ${dateLabel}`,
+    `Mode: ${summary.mode}`,
+    `View: ${summary.cameraView}`,
+    `Total reps: ${summary.reps}`,
+    `Average score: ${summary.averageScore}/100`,
+    `Best score: ${summary.bestScore}/100`,
+    `Before / after: ${summary.beforeScore}/100 -> ${summary.afterScore}/100 (${deltaLabel})`,
+    '',
+    'Top coaching themes:',
+    ...topThemes.map((line) => `- ${line}`),
+    '',
+    'Short set summary:',
+    `- ${summary.reps} ${summary.reps === 1 ? 'rep' : 'reps'} completed at an average of ${summary.averageScore}/100.`,
+    `- The main coaching focus stayed on ${themes[0]?.label ?? 'clean, consistent reps'}.`,
+    '- Use the simple notes export for docs, and CSV/JSON only when you want research detail.',
+  ].join('\n');
 }
