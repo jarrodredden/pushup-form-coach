@@ -361,7 +361,7 @@ export default function App() {
       const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
       if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
         playCueTone(audioContextRef.current);
-        speak('Begin now.');
+        speak('Start push-ups');
       }
     }, 1000);
   };
@@ -542,61 +542,6 @@ export default function App() {
     speak(shortCue);
   };
 
-  const drawGuides = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-    if (!(modeAllowsVisuals && cameraView === 'head-on')) return;
-
-    const handY = height * 0.76;
-    const handRx = width * 0.085;
-    const handRy = height * 0.05;
-    const leftHandX = width * 0.33;
-    const rightHandX = width * 0.67;
-    const footZoneY = height * 0.89;
-    const footZoneRx = width * 0.19;
-    const footZoneRy = height * 0.045;
-
-    ctx.save();
-    ctx.lineWidth = Math.max(2, width / 260);
-    ctx.shadowBlur = 0;
-
-    ctx.fillStyle = 'rgba(114, 239, 255, 0.12)';
-    ctx.strokeStyle = 'rgba(114, 239, 255, 0.72)';
-    ctx.setLineDash([8, 8]);
-    for (const x of [leftHandX, rightHandX]) {
-      ctx.beginPath();
-      ctx.ellipse(x, handY, handRx, handRy, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(114, 239, 255, 0.06)';
-    ctx.strokeStyle = 'rgba(114, 239, 255, 0.3)';
-    ctx.beginPath();
-    ctx.ellipse(width / 2, footZoneY, footZoneRx, footZoneRy, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(8, 17, 26, 0.92)';
-    ctx.strokeStyle = 'rgba(114, 239, 255, 0.26)';
-    ctx.lineWidth = Math.max(1.5, width / 360);
-    const labelWidth = Math.max(120, width * 0.22);
-    const labelHeight = Math.max(24, height * 0.045);
-    const labelX = width / 2 - labelWidth / 2;
-    const labelY = footZoneY + footZoneRy + 10;
-    const radius = 999;
-    ctx.beginPath();
-    ctx.roundRect(labelX, labelY, labelWidth, labelHeight, radius);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#bafcff';
-    ctx.font = `600 ${Math.max(12, Math.round(width / 42))}px Inter, ui-sans-serif, system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('optional feet zone', width / 2, labelY + labelHeight / 2);
-
-    ctx.restore();
-  };
-
   const processAnalysis = (frame: PoseAnalysis) => {
     setAnalysis(frame);
     const smoothConfidence = confidenceSmoothRef.current
@@ -670,6 +615,10 @@ export default function App() {
     setReps(nextRepIndex);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+    if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
+      speak(String(nextRepIndex));
+    }
     repAccumulatorRef.current = createEmptyRepAccumulator();
   };
 
@@ -751,7 +700,6 @@ export default function App() {
     }
     // Keep scoring on raw camera coordinates; the preview mirror is applied to both layers together.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawGuides(ctx, canvas.width, canvas.height);
     if (!landmarks?.length) return;
     ctx.lineWidth = Math.max(2, canvas.width / 240);
     ctx.strokeStyle = 'rgba(123, 245, 255, 0.78)';
@@ -946,6 +894,11 @@ export default function App() {
 
     if (readyTimerRef.current !== null) return;
 
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+    if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
+      speak('Ready');
+    }
+
     readyTimerRef.current = window.setTimeout(() => {
       readyTimerRef.current = null;
       beginCountdown();
@@ -1132,13 +1085,13 @@ export default function App() {
                   className={audioUnlocked ? 'button' : 'button button--primary'}
                   onClick={() => void unlockSound()}
                 >
-                  {audioUnlocked ? 'Sound ready' : 'Enable sound'}
+                  {audioUnlocked ? 'Sound ready' : 'Start sound'}
                 </button>
               ) : null}
               <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
                 Start camera
               </button>
-              <button className="button" onClick={stopSession} disabled={cameraStatus === 'idle' && !sessionReps.length}>
+              <button className="button button--primary button--stop" onClick={stopSession} disabled={cameraStatus === 'idle' && !sessionReps.length}>
                 Stop session
               </button>
               <button className="button" onClick={() => setDemoMode((value) => !value)}>
@@ -1160,15 +1113,6 @@ export default function App() {
                 Export CSV
               </button>
             </div>
-            {modeAllowsAudio ? (
-              <div className={audioUnlocked ? 'audio-gate audio-gate--on' : 'audio-gate'}>
-                <div>
-                  <strong>{audioUnlocked ? 'Audio: on (unlocked)' : 'Audio: needs tap'}</strong>
-                  <p>iPhone won&apos;t show an Allow Audio popup. Tap Enable sound, and turn off the silent switch.</p>
-                </div>
-                <span className="pill">{audioUnlocked ? 'sound ready' : 'tap once to unlock'}</span>
-              </div>
-            ) : null}
           </div>
         </div>
 
