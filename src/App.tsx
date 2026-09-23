@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
-import { createDemoPose } from './lib/demo';
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
@@ -176,7 +175,6 @@ export default function App() {
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
   const [cameraView, setCameraView] = useState<CameraViewMode>('head-on');
   const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('combined');
-  const [demoMode, setDemoMode] = useState(false);
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'loading' | 'live' | 'error'>('idle');
   const [cameraError, setCameraError] = useState('');
   const [poseReady, setPoseReady] = useState(false);
@@ -199,7 +197,6 @@ export default function App() {
   });
   const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
-  const [sessionStopped, setSessionStopped] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
@@ -418,7 +415,6 @@ export default function App() {
     if (hint.includes('hands') && hint.includes('torso')) return 'MOVE BACK: Hands and torso not visible';
     if (hint.includes('hands')) return 'MOVE BACK: Hands not visible';
     if (hint.includes('torso')) return 'MOVE BACK: Torso not visible';
-    if (hint.includes('wrists')) return 'MOVE BACK: Wrists not visible';
     if (hint.includes('shoulders')) return 'MOVE BACK: Shoulders not visible';
     if (hint.includes('full side profile')) return 'MOVE BACK: Full body not visible';
     if (frame.confidence < 0.65) return 'HOLD STILL: Need a clearer body';
@@ -452,7 +448,6 @@ export default function App() {
       mode: feedbackMode,
       cameraFacing,
       cameraView,
-      demoMode,
       notes: summary.notes,
     };
   };
@@ -460,7 +455,7 @@ export default function App() {
   const buildCoachingIssues = (frame: PoseAnalysis) => {
     const issues: Array<{ key: CoachingIssueKey; cue: string }> = [];
     const counting = calibrationStateRef.current === 'counting';
-    const setupCue = frame.setupHint ?? 'Move back so hands, torso, and head stay in frame.';
+    const setupCue = frame.setupHint ?? 'Move back so hands and torso stay in frame.';
     const setupNeeded = counting
       ? frame.confidence < 0.32 || frame.framingScore < 20
       : frame.viewMode === 'head-on'
@@ -793,8 +788,7 @@ export default function App() {
       await video.play();
       runningRef.current = true;
       setCameraStatus('live');
-      setDemoMode(false);
-      setSessionStartedAt((current) => current ?? nowIso());
+            setSessionStartedAt((current) => current ?? nowIso());
       pushLog('system', `Camera started (${cameraFacing}).`);
       const loop = async () => {
         if (!runningRef.current || !poseRef.current || !videoRef.current) return;
@@ -812,7 +806,7 @@ export default function App() {
     } catch (error) {
       console.error(error);
       setCameraStatus('error');
-      setCameraError('Camera access failed. Grant permission or use demo mode.');
+      setCameraError('Camera access failed. Grant permission and try again.');
       pushLog('system', 'Camera access failed.');
       stopCamera();
     }
@@ -839,30 +833,9 @@ export default function App() {
     if (cameraStatus === 'live') setCameraStatus('idle');
   };
 
-  const startDemoLoop = () => {
-    stopCamera();
-    resetCalibrationFlow();
-    if (modeAllowsAudio) void unlockSound();
-    setCameraStatus('live');
-    setSessionStartedAt((current) => current ?? nowIso());
-    pushLog('system', 'Demo mode running.');
-    runningRef.current = true;
-    const loop = () => {
-      if (!runningRef.current) return;
-      frameCounterRef.current += 1;
-      const landmarks = createDemoPose(frameCounterRef.current, cameraView);
-      drawSkeleton(modeAllowsVisuals ? landmarks : null);
-      const frame = analyzePose(landmarks, cameraView);
-      processAnalysis(frame);
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-  };
-
   const stopSession = () => {
     stopCamera();
     runningRef.current = false;
-    setSessionStopped(true);
     setCameraStatus('idle');
     pushLog('system', 'Session stopped.');
   };
@@ -875,7 +848,6 @@ export default function App() {
     setAnalysis(null);
     setCurrentCue('');
     setSessionStartedAt(null);
-    setSessionStopped(false);
     setAudioUnlocked(false);
     setCurrentCue('');
     repCounterRef.current.reset();
@@ -998,7 +970,7 @@ export default function App() {
         console.error(error);
         if (!cancelled) {
           setPoseReady(false);
-          setCameraError('Pose model failed to load. Switch to demo mode or try again.');
+          setCameraError('Pose model failed to load. Try again.');
         }
       }
     })();
@@ -1007,43 +979,6 @@ export default function App() {
       cancelled = true;
     };
   }, [secureContext]);
-
-  useEffect(() => {
-    if (demoMode) {
-      startDemoLoop();
-      return stopCamera;
-    }
-    if (cameraStatus === 'live') {
-      startCamera();
-    }
-    return stopCamera;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demoMode, cameraFacing, cameraView]);
-
-  useEffect(() => {
-    if (!sessionStopped || !analysis) return;
-    if (sessionReps.length === 0) return;
-    const summary: SessionEntry = {
-      id: `${Date.now()}`,
-      name: athleteName.trim() || 'Anonymous',
-      createdAt: nowIso(),
-      reps,
-      averageScore: currentSummary.averageScore,
-      bestScore: currentSummary.bestScore,
-      beforeScore: beforeAfter.before,
-      afterScore: beforeAfter.after,
-      mode: feedbackMode,
-      cameraFacing,
-      cameraView,
-      demoMode,
-      notes: [...new Set(sessionReps.flatMap((rep) => rep.notes))].slice(0, 8),
-    };
-    const nextHistory = [summary, ...history].slice(0, 25);
-    setHistory(nextHistory);
-    saveHistory(SESSION_STORAGE_KEY, nextHistory);
-    setBaselineScore(summary.afterScore);
-    setSessionStopped(false);
-  }, [analysis, athleteName, beforeAfter.after, beforeAfter.before, cameraFacing, cameraView, currentSummary.averageScore, currentSummary.bestScore, demoMode, feedbackMode, history, reps, sessionReps, sessionStopped]);
 
   useEffect(() => {
     return () => {
@@ -1081,7 +1016,7 @@ export default function App() {
             </div>
             <div className="status-badges">
               <span>{cameraStatus === 'live' ? 'live' : cameraStatus}</span>
-              <span>{demoMode ? 'demo' : 'camera'}</span>
+              <span>camera</span>
               <span>{cameraView}</span>
               <span>{feedbackMode}</span>
             </div>
@@ -1145,24 +1080,25 @@ export default function App() {
                   {audioUnlocked ? 'Sound ready' : 'Start sound'}
                 </button>
               ) : null}
+              <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
+                Start camera
+              </button>
               <button
                 className={spokenCoachingEnabled ? 'button button--active' : 'button'}
                 onClick={() => setSpokenCoachingEnabled((value) => !value)}
               >
                 {spokenCoachingEnabled ? 'Form coaching (spoken): on' : 'Form coaching (spoken): off'}
               </button>
-              <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
-                Start camera
-              </button>
-              <button className="button button--primary button--stop" onClick={stopSession} disabled={cameraStatus === 'idle' && !sessionReps.length}>
-                Stop session
-              </button>
-              <button className="button" onClick={() => setDemoMode((value) => !value)}>
-                {demoMode ? 'Exit demo' : 'Demo mode'}
-              </button>
-              <button className="button" onClick={resetSet}>
-                Try again
-              </button>
+              {cameraStatus === 'live' ? (
+                <button className="button button--primary button--stop" onClick={stopSession}>
+                  Stop
+                </button>
+              ) : null}
+              {cameraStatus !== 'live' && (sessionReps.length || analysis) ? (
+                <button className="button button--primary" onClick={resetSet}>
+                  Try again
+                </button>
+              ) : null}
             </div>
 
             <div className="action-row secondary">

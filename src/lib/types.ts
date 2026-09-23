@@ -80,7 +80,6 @@ export interface SessionEntry {
   mode: FeedbackMode;
   cameraFacing: CameraFacing;
   cameraView: CameraViewMode;
-  demoMode: boolean;
   notes: string[];
 }
 
