@@ -80,7 +80,7 @@ function shortenCue(message: string) {
     [/^clean head-on rep.*$/i, 'Good rep'],
     [/^clean side-view rep.*$/i, 'Good rep'],
     [/^audio cues are unlocked.*$/i, 'Audio unlocked'],
-    [/^tap enable sound.*$/i, 'Tap Start sound'],
+    [/^tap enable sound.*$/i, 'Tap Start camera and sound'],
   ];
   for (const [pattern, replacement] of replacements) {
     if (pattern.test(normalized)) return replacement;
@@ -300,7 +300,7 @@ export default function App() {
   const neutralCoachText = modeAllowsAudio
     ? audioUnlocked
       ? 'Keep the phone steady.'
-      : 'Tap Start sound once to unlock cues on iPhone Safari.'
+      : 'Tap Start camera and sound once to unlock cues on iPhone Safari.'
     : 'Control mode shows the camera and calibration gate only.';
   const calibrationHintCopy = 'You do not need 100% — Ready around 80% with a full body in frame.';
   const calibrationChecklist = analysis
@@ -358,8 +358,8 @@ export default function App() {
     setCurrentCue('5');
     let countdown = 5;
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-    const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current;
-    if (canSpeakCountdown && audioContextRef.current) {
+    const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current;
+    if (canSpeakCountdown) {
       speak('Get ready!');
     }
     countdownTimerRef.current = window.setInterval(() => {
@@ -367,7 +367,7 @@ export default function App() {
       if (countdown > 0) {
         setCountdownValue(countdown);
         setCurrentCue(String(countdown));
-        if (canSpeakCountdown && audioContextRef.current) {
+        if (canSpeakCountdown) {
           speak(String(countdown));
         }
         return;
@@ -380,8 +380,10 @@ export default function App() {
       repAccumulatorRef.current = createEmptyRepAccumulator();
       pushLog('info', 'Calibration complete. Counting started.');
       setCurrentCue('go');
-      if (canSpeakCountdown && audioContextRef.current) {
-        playCueTone(audioContextRef.current);
+      if (canSpeakCountdown) {
+        if (audioContextRef.current) {
+          playCueTone(audioContextRef.current);
+        }
         speak(`Let's get started!`);
         speak('Go!');
       }
@@ -390,11 +392,9 @@ export default function App() {
 
   const unlockSound = async () => {
     playVoiceClip('ready', 'Ready!');
+    setAudioUnlocked(true);
+    localStorage.setItem(SOUND_WANTED_KEY, '1');
     const unlocked = await unlockAudioContext(audioContextRef);
-    setAudioUnlocked(unlocked);
-    if (unlocked) {
-      localStorage.setItem(SOUND_WANTED_KEY, '1');
-    }
     if (unlocked && modeAllowsAudio) {
       pushLog('info', 'Sound unlocked for iPhone Safari.');
       if (audioContextRef.current) {
@@ -625,7 +625,7 @@ export default function App() {
       updateCoachingFocus(frame);
     }
     if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
-      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Start sound for audio cues.');
+      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Start camera and sound for audio cues.');
     } else if (!currentModeAllowsVisuals) {
       setCurrentCue('Control mode: camera only.');
     }
@@ -1080,16 +1080,8 @@ export default function App() {
             </div>
 
             <div className="action-row">
-              {modeAllowsAudio ? (
-                <button
-                  className={audioUnlocked ? 'button' : 'button button--primary'}
-                  onClick={() => void unlockSound()}
-                >
-                  {audioUnlocked ? 'Sound ready' : 'Start sound'}
-                </button>
-              ) : null}
               <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
-                Start camera
+                Start camera and sound
               </button>
               <button
                 className={spokenCoachingEnabled ? 'button button--active' : 'button'}
@@ -1229,7 +1221,7 @@ export default function App() {
                 ? analysis.notes
                 : [
                     calibrationStatusText,
-                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Start sound for a spoken countdown on iPhone Safari.') : 'No visual coaching in Control mode.',
+                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Start camera and sound for a spoken countdown on iPhone Safari.') : 'No visual coaching in Control mode.',
                     cameraView === 'head-on' ? 'Head-on is the recommended mobile demo.' : 'Side view is optional and needs a wider tripod setup.',
                   ]).slice(0, 3).map((note) => (
                 <li key={note}>{note}</li>
