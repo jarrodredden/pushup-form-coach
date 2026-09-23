@@ -9,6 +9,7 @@ type VoiceQueueItem = {
 const voiceQueue: VoiceQueueItem[] = [];
 let voiceBusy = false;
 let activeAudio: HTMLAudioElement | null = null;
+const preloadedClips = new Map<string, HTMLAudioElement>();
 
 function slugify(text: string) {
   return text
@@ -40,6 +41,10 @@ function queueClip(clip: string, fallback: string) {
   voiceQueue.push({ clip, fallback });
 }
 
+function clipUrl(clip: string) {
+  return `${VOICE_CLIP_ROOT}/${clip}.mp3`;
+}
+
 function queueFallbackSpeech(message: string) {
   if (!('speechSynthesis' in window)) return false;
   try {
@@ -63,7 +68,7 @@ function playNextClip() {
   if (!next) return;
 
   voiceBusy = true;
-  const audio = new Audio(`${VOICE_CLIP_ROOT}/${next.clip}.mp3`);
+  const audio = new Audio(clipUrl(next.clip));
   audio.preload = 'auto';
   activeAudio = audio;
 
@@ -101,6 +106,18 @@ function playNextClip() {
       // Keep moving even if the fallback isn't available.
     }
     finish();
+  }
+}
+
+
+export function preloadVoiceClips(clips: string[]) {
+  if (typeof window === 'undefined') return;
+  for (const clip of clips) {
+    if (preloadedClips.has(clip)) continue;
+    const audio = new Audio(clipUrl(clip));
+    audio.preload = 'auto';
+    audio.load();
+    preloadedClips.set(clip, audio);
   }
 }
 

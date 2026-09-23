@@ -5,7 +5,7 @@ import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
-import { playVoiceClip, playVoiceMessage } from './lib/voiceAudio';
+import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
 import {
   CameraFacing,
   CameraViewMode,
@@ -417,6 +417,7 @@ export default function App() {
 
   const unlockSound = async () => {
     playVoiceClip('ready', 'Ready!');
+    preloadVoiceClips(['calibration-complete', 'countdown-1', 'countdown-2', 'countdown-3', 'countdown-4', 'countdown-5', 'lets-get-started', 'go']);
     setAudioUnlocked(true);
     localStorage.setItem(SOUND_WANTED_KEY, '1');
     const unlocked = await unlockAudioContext(audioContextRef);
