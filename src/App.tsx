@@ -361,15 +361,19 @@ export default function App() {
     const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current;
     if (canSpeakCountdown) {
       speak('Get ready!');
+      speak('5');
+      speak('4');
+      speak('3');
+      speak('2');
+      speak('1');
+      speak(`Let's get started!`);
+      speak('Go!');
     }
     countdownTimerRef.current = window.setInterval(() => {
       countdown -= 1;
       if (countdown > 0) {
         setCountdownValue(countdown);
         setCurrentCue(String(countdown));
-        if (canSpeakCountdown) {
-          speak(String(countdown));
-        }
         return;
       }
 
@@ -380,12 +384,8 @@ export default function App() {
       repAccumulatorRef.current = createEmptyRepAccumulator();
       pushLog('info', 'Calibration complete. Counting started.');
       setCurrentCue('go');
-      if (canSpeakCountdown) {
-        if (audioContextRef.current) {
-          playCueTone(audioContextRef.current);
-        }
-        speak(`Let's get started!`);
-        speak('Go!');
+      if (audioContextRef.current) {
+        playCueTone(audioContextRef.current);
       }
     }, 1000);
   };
