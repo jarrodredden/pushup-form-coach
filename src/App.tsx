@@ -89,9 +89,9 @@ function shortenCue(message: string) {
 }
 
 const repEncouragements = {
-  low: ['You can do better — keep going.', 'Build that rep a little more.', 'Try for more depth next time.'],
-  mid: ['Good job — keep that body line tight.', 'Nice rep — stay strong and steady.', 'Good work — keep that plank tight.'],
-  high: ['Great work — keep that depth.', 'Awesome rep — stay tight.', 'Great rep — strong and clean.'],
+  low: ['You’ve got this — drop a bit lower next one.', 'Shake it off — next one’s yours.', 'Nice try — a little deeper next rep.', 'Keep going — just a bit lower.', 'You can do it — one more notch deeper.'],
+  mid: ['Good rep — a little more depth and you’re golden.', 'Nice work — keep that one coming.', 'Solid — a touch deeper next time.', 'Good job — that’s moving the right way.', 'Strong rep — keep chasing the depth.'],
+  high: ['Nice! That was a strong one.', 'Yes! Deep and solid!', 'Great one — keep that energy.', 'Awesome rep — that was clean.', 'Big rep — you’re flying now.'],
 };
 
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
@@ -643,7 +643,6 @@ export default function App() {
         const phrasePool = repEncouragements[band];
         const phrase = phrasePool[repEncouragementTickRef.current % phrasePool.length];
         repEncouragementTickRef.current += 1;
-        speak(`Rep ${nextRepIndex}`);
         speak(phrase);
       } else {
         speak(`Rep ${nextRepIndex}`);
