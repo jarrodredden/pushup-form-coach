@@ -417,7 +417,38 @@ export default function App() {
 
   const unlockSound = async () => {
     playVoiceClip('ready', 'Ready!');
-    preloadVoiceClips(['calibration-complete', 'countdown-1', 'countdown-2', 'countdown-3', 'countdown-4', 'countdown-5', 'lets-get-started', 'go']);
+    preloadVoiceClips([
+      'calibration-complete',
+      'countdown-1',
+      'countdown-2',
+      'countdown-3',
+      'countdown-4',
+      'countdown-5',
+      'lets-get-started',
+      'go',
+      'go-a-little-deeper',
+      'tuck-elbows-in',
+      'hands-under-shoulders',
+      'keep-head-centered',
+      'keep-hips-level',
+      'back-up-for-hands-and-torso',
+      'move-back-or-lower-the-phone',
+      'good-rep-a-little-more-depth-and-youre-golden',
+      'nice-that-was-a-strong-one',
+      'yes-deep-and-solid',
+      'great-one-keep-that-energy',
+      'awesome-rep-that-was-clean',
+      'big-rep-youre-flying-now',
+      'good-job-thats-moving-the-right-way',
+      'nice-work-keep-that-one-coming',
+      'solid-a-touch-deeper-next-time',
+      'strong-rep-keep-chasing-the-depth',
+      'youve-got-this-drop-a-bit-lower-next-one',
+      'shake-it-off-next-ones-yours',
+      'nice-try-a-little-deeper-next-rep',
+      'keep-going-just-a-bit-lower',
+      'you-can-do-it-one-more-notch-deeper',
+    ]);
     setAudioUnlocked(true);
     localStorage.setItem(SOUND_WANTED_KEY, '1');
     const unlocked = await unlockAudioContext(audioContextRef);
@@ -586,10 +617,6 @@ export default function App() {
     }
 
     pushLog('cue', shortCue);
-    if (audioContextRef.current) {
-      void audioContextRef.current.resume();
-      playCueTone(audioContextRef.current);
-    }
     speak(shortCue);
   };
 
@@ -666,8 +693,8 @@ export default function App() {
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-    if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
-      repSpeechLockUntilRef.current = Date.now() + 1800;
+    if (currentModeAllowsAudio && audioUnlockedRef.current) {
+      repSpeechLockUntilRef.current = Date.now() + 900;
       if (spokenCoachingEnabledRef.current) {
         const band = rep.score < 50 ? 'low' : rep.score <= 65 ? 'mid' : 'high';
         const phrasePool = repEncouragements[band];

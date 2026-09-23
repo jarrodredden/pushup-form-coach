@@ -34,6 +34,10 @@ function clipNamesForMessage(message: string): string[] | null {
   return [slugify(normalized)];
 }
 
+export function resolveVoiceClipNames(message: string) {
+  return clipNamesForMessage(message);
+}
+
 function queueClip(clip: string, fallback: string) {
   if (voiceQueue.length >= VOICE_QUEUE_LIMIT) {
     voiceQueue.shift();
