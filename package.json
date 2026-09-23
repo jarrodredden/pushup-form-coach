@@ -9,10 +9,12 @@
     "preview": "vite preview",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate-voices": "node scripts/generate-voices.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",
+    "google-tts-api": "^2.0.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

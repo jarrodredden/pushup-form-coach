@@ -5,6 +5,7 @@ import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
+import { playVoiceClip, playVoiceMessage } from './lib/voiceAudio';
 import {
   CameraFacing,
   CameraViewMode,
@@ -59,136 +60,8 @@ const qualityLabel = (value: number) => {
 };
 const nowIso = () => new Date().toISOString();
 
-let speechBusy = false;
-let speechCurrent = '';
-const speechQueue: string[] = [];
-const SPEECH_QUEUE_LIMIT = 10;
-let speechVoice: SpeechSynthesisVoice | null = null;
-let speechVoiceListenerInstalled = false;
-let speechWatchdog: number | null = null;
-
-function scoreVoice(voice: SpeechSynthesisVoice) {
-  const name = `${voice.name} ${voice.voiceURI}`.toLowerCase();
-  let score = 0;
-  if (voice.lang.toLowerCase() === 'en-us') score += 100;
-  else if (voice.lang.toLowerCase().startsWith('en-')) score += 60;
-  if (/enhanced|premium|siri|neural|natural/.test(name)) score += 40;
-  if (/google.*us english|google us english/.test(name)) score += 35;
-  if (/us english/.test(name)) score += 15;
-  if (voice.default) score += 10;
-  return score;
-}
-
-function refreshSpeechVoice() {
-  if (!('speechSynthesis' in window)) return;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return;
-  const ranked = voices
-    .slice()
-    .sort((a, b) => scoreVoice(b) - scoreVoice(a));
-  speechVoice = ranked[0] ?? null;
-}
-
-function ensureSpeechVoiceListener() {
-  if (speechVoiceListenerInstalled || !('speechSynthesis' in window)) return;
-  speechVoiceListenerInstalled = true;
-  window.speechSynthesis.addEventListener('voiceschanged', refreshSpeechVoice);
-  refreshSpeechVoice();
-}
-
-function primeSpeechOnGesture(message: string) {
-  if (!('speechSynthesis' in window)) return;
-  const normalized = message.trim();
-  if (!normalized) return;
-  try {
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume();
-    }
-    const utterance = new SpeechSynthesisUtterance(normalized);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.98;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    // If the priming speak fails, the queued path will still retry later.
-  }
-}
-
 function speak(message: string) {
-  if (!('speechSynthesis' in window)) return;
-  ensureSpeechVoiceListener();
-  const normalized = message.trim();
-  if (!normalized) return;
-  const lastQueued = speechQueue[speechQueue.length - 1];
-  if (normalized === speechCurrent || normalized === lastQueued) return;
-  if (speechQueue.length >= SPEECH_QUEUE_LIMIT) {
-    speechQueue.shift();
-  }
-  speechQueue.push(normalized);
-  if (speechBusy) return;
-
-  const recover = (current: string) => {
-    if (!current) return;
-    if (speechQueue[0] !== current) {
-      speechQueue.unshift(current);
-    }
-    speechBusy = false;
-    speechCurrent = '';
-    speechVoice = null;
-    if (speechWatchdog !== null) {
-      window.clearTimeout(speechWatchdog);
-      speechWatchdog = null;
-    }
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-  };
-
-  const speakNext = () => {
-    if (speechBusy) return;
-    const next = speechQueue.shift();
-    if (!next) return;
-    speechBusy = true;
-    speechCurrent = next;
-    const utterance = new SpeechSynthesisUtterance(next);
-    const voices = window.speechSynthesis.getVoices();
-    const fallbackVoice = voices.slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0] ?? null;
-    const voice = speechVoice ?? fallbackVoice;
-    if (voice) utterance.voice = voice;
-    utterance.lang = voice?.lang ?? 'en-US';
-    utterance.rate = 0.98;
-    utterance.pitch = 1;
-    utterance.onend = () => {
-      if (speechWatchdog !== null) {
-        window.clearTimeout(speechWatchdog);
-        speechWatchdog = null;
-      }
-      speechBusy = false;
-      speechCurrent = '';
-      speakNext();
-    };
-    utterance.onerror = () => {
-      recover(next);
-      speakNext();
-    };
-    speechWatchdog = window.setTimeout(() => {
-      if (speechCurrent === next) {
-        recover(next);
-        speakNext();
-      }
-    }, 4500);
-    try {
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      recover(next);
-      speakNext();
-    }
-  };
-
-  speakNext();
+  playVoiceMessage(message);
 }
 
 function shortenCue(message: string) {
@@ -514,7 +387,7 @@ export default function App() {
   };
 
   const unlockSound = async () => {
-    primeSpeechOnGesture('Ready');
+    playVoiceClip('ready', 'Ready');
     const unlocked = await unlockAudioContext(audioContextRef);
     setAudioUnlocked(unlocked);
     if (unlocked && modeAllowsAudio) {
@@ -769,9 +642,10 @@ export default function App() {
         const phrasePool = repEncouragements[band];
         const phrase = phrasePool[repEncouragementTickRef.current % phrasePool.length];
         repEncouragementTickRef.current += 1;
-        speak(`Rep ${nextRepIndex}, score ${rep.score}. ${phrase}`);
+        speak(`Rep ${nextRepIndex}`);
+        speak(phrase);
       } else {
-        speak(String(nextRepIndex));
+        speak(`Rep ${nextRepIndex}`);
       }
     }
     repAccumulatorRef.current = createEmptyRepAccumulator();
