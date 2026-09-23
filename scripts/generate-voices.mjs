@@ -40,6 +40,7 @@ const tips = [
 
 const files = [
   ['ready', 'Ready!'],
+  ['calibration-complete', 'Calibration complete!'],
   ['get-ready', 'Get ready!'],
   ['lets-get-started', "Let's get started!"],
   ['go', 'Go!'],

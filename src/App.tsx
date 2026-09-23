@@ -290,7 +290,9 @@ export default function App() {
 
   const calibrationStatusText =
     calibrationState === 'countdown'
-      ? `Begin in ${countdownValue ?? 3}`
+      ? countdownValue === null
+        ? 'Calibration complete'
+        : `Begin in ${countdownValue}`
       : calibrationState === 'ready'
         ? 'Ready'
         : calibrationState === 'counting'
@@ -354,40 +356,49 @@ export default function App() {
     if (calibrationState === 'counting' || countdownTimerRef.current !== null) return;
     clearCalibrationTimers();
     setCalibrationState('countdown');
-    setCountdownValue(5);
-    setCurrentCue('5');
+    setCountdownValue(null);
+    setCurrentCue('Calibration complete');
     let countdown = 5;
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current;
     if (canSpeakCountdown) {
-      speak('Get ready!');
-      speak('5');
-      speak('4');
-      speak('3');
-      speak('2');
-      speak('1');
-      speak(`Let's get started!`);
-      speak('Go!');
+      speak('Calibration complete');
     }
-    countdownTimerRef.current = window.setInterval(() => {
-      countdown -= 1;
-      if (countdown > 0) {
-        setCountdownValue(countdown);
-        setCurrentCue(String(countdown));
-        return;
-      }
 
-      clearCalibrationTimers();
-      setCountdownValue(null);
-      setCalibrationState('counting');
-      repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
-      repAccumulatorRef.current = createEmptyRepAccumulator();
-      pushLog('info', 'Calibration complete. Counting started.');
-      setCurrentCue('go');
-      if (audioContextRef.current) {
-        playCueTone(audioContextRef.current);
+    const startCountdown = () => {
+      setCountdownValue(5);
+      setCurrentCue('5');
+      if (canSpeakCountdown) {
+        speak('5');
+        speak('4');
+        speak('3');
+        speak('2');
+        speak('1');
+        speak(`Let's get started!`);
+        speak('Go!');
       }
-    }, 1000);
+      countdownTimerRef.current = window.setInterval(() => {
+        countdown -= 1;
+        if (countdown > 0) {
+          setCountdownValue(countdown);
+          setCurrentCue(String(countdown));
+          return;
+        }
+
+        clearCalibrationTimers();
+        setCountdownValue(null);
+        setCalibrationState('counting');
+        repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
+        repAccumulatorRef.current = createEmptyRepAccumulator();
+        pushLog('info', 'Calibration complete. Counting started.');
+        setCurrentCue('go');
+        if (audioContextRef.current) {
+          playCueTone(audioContextRef.current);
+        }
+      }, 1000);
+    };
+
+    countdownTimerRef.current = window.setTimeout(startCountdown, 800);
   };
 
   const unlockSound = async () => {
