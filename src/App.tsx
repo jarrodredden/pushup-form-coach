@@ -272,17 +272,17 @@ export default function App() {
   const metricDefinitions = cameraView === 'head-on'
     ? [
       { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
+      { label: 'Body line', value: analysis?.bodyLineScore ?? null },
       { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
       { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
-      { label: 'Head alignment', value: analysis?.headAlignmentScore ?? null },
       { label: 'Framing', value: analysis?.framingScore ?? null },
     ]
     : [
       { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
+      { label: 'Body line', value: analysis?.bodyLineScore ?? null },
       { label: 'Hip sag', value: analysis?.hipSagScore ?? null },
       { label: 'Hip pike', value: analysis?.hipPikeScore ?? null },
       { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
-      { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
     ];
 
   const calibrationStatusText =
@@ -296,8 +296,8 @@ export default function App() {
 
   const neutralCoachText = modeAllowsAudio
     ? audioUnlocked
-      ? 'Audio: on (unlocked). Keep the phone steady.'
-      : 'Tap Enable sound once to unlock cues on iPhone Safari.'
+      ? 'Keep the phone steady.'
+      : 'Tap Start sound once to unlock cues on iPhone Safari.'
     : 'Control mode shows the camera and calibration gate only.';
   const calibrationHintCopy = 'You do not need 100% — Ready around 80% with a full body in frame.';
   const calibrationChecklist = analysis
@@ -456,14 +456,15 @@ export default function App() {
 
     if (frame.viewMode === 'head-on') {
       if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
+      if (frame.bodyLineScore < 74) issues.push({ key: 'hips', cue: 'Keep the hips lower and the body straighter.' });
       if (frame.elbowFlareScore < 68) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
-      if (frame.headAlignmentScore < 70) issues.push({ key: 'headAlignment', cue: 'Keep the head centered.' });
       if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
+      if (frame.headAlignmentScore < 70) issues.push({ key: 'headAlignment', cue: 'Keep the head centered.' });
       return issues;
     }
 
     if (frame.elbowDepthScore < 68) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
-    if ((frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72) issues.push({ key: 'hips', cue: 'Keep the hips level.' });
+    if (frame.bodyLineScore < 74 || (frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72) issues.push({ key: 'hips', cue: 'Keep the hips level and the body straighter.' });
     if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
     if (frame.elbowFlareScore < 70) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
     return issues;
@@ -658,6 +659,7 @@ export default function App() {
       ...repAccumulatorRef.current,
       samples: repAccumulatorRef.current.samples + 1,
       depth: repAccumulatorRef.current.depth + frame.elbowDepthScore,
+      bodyLine: repAccumulatorRef.current.bodyLine + frame.bodyLineScore,
       elbowFlare: repAccumulatorRef.current.elbowFlare + frame.elbowFlareScore,
       headAlignment: repAccumulatorRef.current.headAlignment + frame.headAlignmentScore,
       framing: repAccumulatorRef.current.framing + frame.framingScore,
@@ -1188,8 +1190,8 @@ export default function App() {
                 </div>
                 <p className="metric-copy">
                   {cameraView === 'head-on'
-                    ? 'Head-on view emphasizes elbow depth, elbow flare, hand stack, head alignment, and clear framing. Depth and elbow flare coach gently and one cue stays active at a time.'
-                    : 'Side view keeps the classic hip sag / hip pike body-line cues, but it needs more room and a wider setup.'}
+                    ? 'Head-on view emphasizes depth and body line first. It uses a hip-height proxy for straightness, so Side view is best for judging plank line exactly.'
+                    : 'Side view keeps the classic hip sag / hip pike body-line cues, and the score weights depth + body line the most.'}
                 </p>
               </>
             ) : (
@@ -1206,10 +1208,6 @@ export default function App() {
                   <div>
                     <span className="muted">View</span>
                     <strong>{cameraView}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">Audio</span>
-                    <strong>{modeAllowsAudio ? (audioUnlocked ? 'Audio: on (unlocked)' : 'Audio: needs tap') : 'off'}</strong>
                   </div>
                 </div>
                 <div className="checklist">

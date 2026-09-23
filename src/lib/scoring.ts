@@ -35,6 +35,7 @@ const bodyLineY = (shoulderMid: PosePoint, hipMid: PosePoint, ankleMid: PosePoin
 
 function buildHeadOnNotes(metrics: {
   elbowDepthScore: number;
+  bodyLineScore: number;
   elbowFlareScore: number;
   handStackScore: number;
   headAlignmentScore: number;
@@ -45,6 +46,7 @@ function buildHeadOnNotes(metrics: {
   if (metrics.setupHint) notes.push(metrics.setupHint);
   // Front-view coaching is intentionally softer so depth and flare stay achievable on a phone camera.
   if (metrics.elbowDepthScore < 68) notes.push('Lower a little deeper at the bottom of the rep.');
+  if (metrics.bodyLineScore < 74) notes.push('Keep the hips lower and the body straighter.');
   if (metrics.elbowFlareScore < 68) notes.push('Tuck the elbows in a bit more from the front view.');
   if (metrics.handStackScore < 74) notes.push('Stack the hands under the shoulders.');
   if (metrics.headAlignmentScore < 72) notes.push('Keep the head centered between the shoulders.');
@@ -55,6 +57,7 @@ function buildHeadOnNotes(metrics: {
 
 function buildSideNotes(metrics: {
   elbowDepthScore: number;
+  bodyLineScore: number;
   hipSagScore: number | null;
   hipPikeScore: number | null;
   handStackScore: number;
@@ -64,6 +67,7 @@ function buildSideNotes(metrics: {
   const notes: string[] = [];
   if (metrics.setupHint) notes.push(metrics.setupHint);
   if (metrics.elbowDepthScore < 72) notes.push('Lower a bit deeper.');
+  if (metrics.bodyLineScore < 74) notes.push('Keep the body in a straighter plank line.');
   if ((metrics.hipSagScore ?? 100) < 74) notes.push('Keep the hips from sagging.');
   if ((metrics.hipPikeScore ?? 100) < 74) notes.push('Keep the hips level and avoid piking.');
   if (metrics.handStackScore < 74) notes.push('Keep hands stacked under the shoulders.');
@@ -100,6 +104,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       overallScore: 0,
       elbowAngle: 180,
       elbowDepthScore: 0,
+      bodyLineScore: 0,
       elbowFlareScore: 0,
       handStackScore: 0,
       headAlignmentScore: 0,
@@ -149,6 +154,11 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     : 55;
   const framingHintText = framingHint(landmarks, viewMode);
   const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
+  const bodyLineProxyScore = clamp(
+    100 - Math.abs((hipMid.y - shoulderMid.y) - shoulderWidth * 1.4) / Math.max(shoulderWidth * 0.7, 0.02) * 100,
+    0,
+    100,
+  );
   const framingScore = Math.round(
     clamp(
       (averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 0.55 + averageVisibility(landmarks, [LEFT.ankle, RIGHT.ankle]) * 0.45) * 100,
@@ -159,6 +169,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
 
   let hipSagScore: number | null = null;
   let hipPikeScore: number | null = null;
+  let bodyLineScore = 0;
   let overallScore = 0;
   let notes: string[] = [];
 
@@ -167,15 +178,16 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     const hipDeviation = hipMid.y - lineY;
     hipSagScore = clamp(100 - Math.max(0, hipDeviation / torsoLength) * 240, 0, 100);
     hipPikeScore = clamp(100 - Math.max(0, -hipDeviation / torsoLength) * 240, 0, 100);
+    bodyLineScore = Math.round(((hipSagScore ?? 0) + (hipPikeScore ?? 0)) / 2);
     overallScore = Math.round(
-      elbowDepthScore * 0.38 +
-        (hipSagScore ?? 0) * 0.22 +
-        (hipPikeScore ?? 0) * 0.18 +
-        handStackScore * 0.14 +
-        elbowFlareScore * 0.08,
+      elbowDepthScore * 0.5 +
+        bodyLineScore * 0.35 +
+        handStackScore * 0.1 +
+        elbowFlareScore * 0.05,
     );
     notes = buildSideNotes({
       elbowDepthScore: Math.round(elbowDepthScore),
+      bodyLineScore,
       hipSagScore,
       hipPikeScore,
       handStackScore: Math.round(handStackScore),
@@ -183,6 +195,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       setupHint: framingHintText,
     });
   } else {
+    bodyLineScore = Math.round(bodyLineProxyScore);
     const headOnFrameScore = clamp(
       averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 40 +
         averageVisibility(landmarks, [LEFT.shoulder, RIGHT.shoulder]) * 35 +
@@ -191,14 +204,15 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       100,
     );
     overallScore = Math.round(
-      elbowDepthScore * 0.4 +
-        elbowFlareScore * 0.2 +
-        handStackScore * 0.2 +
-        headAlignmentScore * 0.15 +
-        headOnFrameScore * 0.05,
+      elbowDepthScore * 0.48 +
+        bodyLineScore * 0.28 +
+        elbowFlareScore * 0.1 +
+        handStackScore * 0.08 +
+        headAlignmentScore * 0.06,
     );
     notes = buildHeadOnNotes({
       elbowDepthScore: Math.round(elbowDepthScore),
+      bodyLineScore,
       elbowFlareScore: Math.round(elbowFlareScore),
       handStackScore: Math.round(handStackScore),
       headAlignmentScore: Math.round(headAlignmentScore),
@@ -210,6 +224,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       overallScore,
       elbowAngle,
       elbowDepthScore: Math.round(elbowDepthScore),
+      bodyLineScore,
       elbowFlareScore: Math.round(elbowFlareScore),
       handStackScore: Math.round(handStackScore),
       headAlignmentScore: Math.round(headAlignmentScore),
@@ -228,6 +243,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     overallScore,
     elbowAngle,
     elbowDepthScore: Math.round(elbowDepthScore),
+    bodyLineScore,
     elbowFlareScore: Math.round(elbowFlareScore),
     handStackScore: Math.round(handStackScore),
     headAlignmentScore: Math.round(headAlignmentScore),
@@ -245,6 +261,7 @@ export function createEmptyRepAccumulator(): RepAccumulator {
   return {
     samples: 0,
     depth: 0,
+    bodyLine: 0,
     elbowFlare: 0,
     headAlignment: 0,
     framing: 0,
@@ -260,6 +277,7 @@ export function createEmptyRepAccumulator(): RepAccumulator {
 export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number): SessionRep | null {
   if (!accumulator.samples) return null;
   const depth = accumulator.depth / accumulator.samples;
+  const bodyLine = accumulator.bodyLine / accumulator.samples;
   const elbowFlare = accumulator.elbowFlare / accumulator.samples;
   const headAlignment = accumulator.headAlignment / accumulator.samples;
   const framing = accumulator.framing / accumulator.samples;
@@ -269,8 +287,8 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
 
   const score =
     analysis.viewMode === 'side'
-      ? Math.round(depth * 0.38 + hipSag * 0.22 + hipPike * 0.18 + handStack * 0.14 + elbowFlare * 0.08)
-      : Math.round(depth * 0.4 + elbowFlare * 0.2 + handStack * 0.2 + headAlignment * 0.15 + framing * 0.05);
+      ? Math.round(depth * 0.5 + bodyLine * 0.35 + handStack * 0.1 + elbowFlare * 0.05)
+      : Math.round(depth * 0.48 + bodyLine * 0.28 + elbowFlare * 0.1 + handStack * 0.08 + headAlignment * 0.06);
 
   return {
     index,
@@ -278,6 +296,7 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
     score,
     notes: [...new Set([...accumulator.notes, ...analysis.notes])].slice(0, 6),
     elbowDepthScore: Math.round(depth),
+    bodyLineScore: Math.round(bodyLine || analysis.bodyLineScore),
     elbowFlareScore: Math.round(elbowFlare),
     handStackScore: Math.round(handStack),
     headAlignmentScore: Math.round(headAlignment),

@@ -15,6 +15,7 @@ export interface PoseAnalysis {
   overallScore: number;
   elbowAngle: number;
   elbowDepthScore: number;
+  bodyLineScore: number;
   elbowFlareScore: number;
   handStackScore: number;
   headAlignmentScore: number;
@@ -30,6 +31,7 @@ export interface PoseAnalysis {
 export interface RepAccumulator {
   samples: number;
   depth: number;
+  bodyLine: number;
   elbowFlare: number;
   headAlignment: number;
   framing: number;
@@ -47,6 +49,7 @@ export interface SessionRep {
   score: number;
   notes: string[];
   elbowDepthScore: number;
+  bodyLineScore: number;
   elbowFlareScore: number;
   handStackScore: number;
   headAlignmentScore: number;

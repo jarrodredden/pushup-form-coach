@@ -11,6 +11,7 @@ describe('notes export', () => {
         score: 76,
         notes: ['Go a little deeper.', 'Tuck the elbows in.'],
         elbowDepthScore: 68,
+        bodyLineScore: 72,
         elbowFlareScore: 71,
         handStackScore: 80,
         headAlignmentScore: 78,

@@ -51,6 +51,7 @@ describe('push-up scoring', () => {
     const accumulator = createEmptyRepAccumulator();
     accumulator.samples = 4;
     accumulator.depth = 360;
+    accumulator.bodyLine = 360;
     accumulator.elbowFlare = 360;
     accumulator.headAlignment = 360;
     accumulator.framing = 360;
