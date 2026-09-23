@@ -23,6 +23,7 @@ const POSE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@late
 const SESSION_STORAGE_KEY = 'pushup-coach-history';
 const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
+const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
 
 const cameraOptions: { label: string; value: CameraFacing }[] = [
   { label: 'Front camera', value: 'user' },
@@ -193,7 +194,7 @@ export default function App() {
   });
   const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(() => localStorage.getItem(SOUND_WANTED_KEY) === '1');
   const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
@@ -388,9 +389,12 @@ export default function App() {
   };
 
   const unlockSound = async () => {
-    playVoiceClip('ready', 'Ready');
+    playVoiceClip('ready', 'Ready!');
     const unlocked = await unlockAudioContext(audioContextRef);
     setAudioUnlocked(unlocked);
+    if (unlocked) {
+      localStorage.setItem(SOUND_WANTED_KEY, '1');
+    }
     if (unlocked && modeAllowsAudio) {
       pushLog('info', 'Sound unlocked for iPhone Safari.');
       if (audioContextRef.current) {
@@ -770,7 +774,7 @@ export default function App() {
     setCameraError('');
     stopCamera();
     resetCalibrationFlow();
-    if (modeAllowsAudio) void unlockSound();
+    void unlockSound();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -846,7 +850,6 @@ export default function App() {
     setAnalysis(null);
     setCurrentCue('');
     setSessionStartedAt(null);
-    setAudioUnlocked(false);
     setCurrentCue('');
     repCounterRef.current.reset();
     repEncouragementTickRef.current = 0;
