@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { createDemoPose } from './lib/demo';
-import { buildCsv, buildNotesExport, downloadTextFile, exportSessionJson } from './lib/export';
+import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
@@ -152,6 +152,7 @@ export default function App() {
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
+  const repCountRef = useRef(0);
   const coachingFocusRef = useRef<{ key: CoachingIssueKey | null; resolvedAt: number | null; cue: string }>({
     key: null,
     resolvedAt: null,
@@ -202,6 +203,9 @@ export default function App() {
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
+  useEffect(() => {
+    repCountRef.current = reps;
+  }, [reps]);
   useEffect(() => {
     if (calibrationState !== 'checking') {
       if (checkingTimerRef.current !== null) {
@@ -654,9 +658,11 @@ export default function App() {
   };
 
   const finishRep = (analysisFrame: PoseAnalysis) => {
-    const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, reps + 1);
+    const nextRepIndex = repCountRef.current + 1;
+    repCountRef.current = nextRepIndex;
+    const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, nextRepIndex);
     if (!rep) return;
-    setReps((value) => value + 1);
+    setReps(nextRepIndex);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
     repAccumulatorRef.current = createEmptyRepAccumulator();
@@ -879,6 +885,7 @@ export default function App() {
     setSessionStopped(false);
     setAudioUnlocked(false);
     setCurrentCue('');
+    repCountRef.current = 0;
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
     frameCounterRef.current = 0;
@@ -913,12 +920,6 @@ export default function App() {
     if (!sessionReps.length && !analysis) return;
     const summary: SessionSummary = buildSessionSummary();
     downloadTextFile(`pushup-session-${summary.id}.csv`, buildCsv(summary, sessionReps, sessionLogs), 'text/csv');
-  };
-
-  const exportJson = () => {
-    if (!sessionReps.length && !analysis) return;
-    const summary: SessionSummary = buildSessionSummary();
-    downloadTextFile(`pushup-session-${summary.id}.json`, exportSessionJson(summary, sessionReps, sessionLogs, history), 'application/json');
   };
 
   useEffect(() => {
@@ -1122,6 +1123,14 @@ export default function App() {
             </div>
 
             <div className="action-row">
+              {modeAllowsAudio ? (
+                <button
+                  className={audioUnlocked ? 'button' : 'button button--primary'}
+                  onClick={() => void unlockSound()}
+                >
+                  {audioUnlocked ? 'Sound ready' : 'Enable sound'}
+                </button>
+              ) : null}
               <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
                 Start camera
               </button>
@@ -1146,9 +1155,6 @@ export default function App() {
               <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
                 Export CSV
               </button>
-              <button className="button" onClick={exportJson} disabled={!sessionReps.length && !analysis}>
-                Export JSON
-              </button>
             </div>
             {modeAllowsAudio ? (
               <div className={audioUnlocked ? 'audio-gate audio-gate--on' : 'audio-gate'}>
@@ -1156,13 +1162,7 @@ export default function App() {
                   <strong>{audioUnlocked ? 'Audio: on (unlocked)' : 'Audio: needs tap'}</strong>
                   <p>iPhone won&apos;t show an Allow Audio popup. Tap Enable sound, and turn off the silent switch.</p>
                 </div>
-                {!audioUnlocked ? (
-                  <button className="button button--primary" onClick={() => void unlockSound()}>
-                    Enable sound
-                  </button>
-                ) : (
-                  <span className="pill">sound ready</span>
-                )}
+                <span className="pill">{audioUnlocked ? 'sound ready' : 'tap once to unlock'}</span>
               </div>
             ) : null}
           </div>
