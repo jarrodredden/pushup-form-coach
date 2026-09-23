@@ -149,6 +149,7 @@ export default function App() {
   const countdownTimerRef = useRef<number | null>(null);
   const readyTimerRef = useRef<number | null>(null);
   const checkingTimerRef = useRef<number | null>(null);
+  const goOverlayTimerRef = useRef<number | null>(null);
   const checkingStartedAtRef = useRef<number | null>(null);
   const confidenceSmoothRef = useRef(0);
   const activeFailureRef = useRef({ text: '', frames: 0, startedAt: 0 });
@@ -198,6 +199,7 @@ export default function App() {
   const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
+  const [showGoOverlay, setShowGoOverlay] = useState(false);
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
@@ -340,6 +342,10 @@ export default function App() {
       window.clearInterval(checkingTimerRef.current);
       checkingTimerRef.current = null;
     }
+    if (goOverlayTimerRef.current !== null) {
+      window.clearTimeout(goOverlayTimerRef.current);
+      goOverlayTimerRef.current = null;
+    }
   };
 
   const resetCalibrationFlow = () => {
@@ -388,10 +394,18 @@ export default function App() {
         clearCalibrationTimers();
         setCountdownValue(null);
         setCalibrationState('counting');
+        setShowGoOverlay(true);
         repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
         repAccumulatorRef.current = createEmptyRepAccumulator();
         pushLog('info', 'Calibration complete. Counting started.');
         setCurrentCue('go');
+        if (goOverlayTimerRef.current !== null) {
+          window.clearTimeout(goOverlayTimerRef.current);
+        }
+        goOverlayTimerRef.current = window.setTimeout(() => {
+          setShowGoOverlay(false);
+          goOverlayTimerRef.current = null;
+        }, 900);
         if (audioContextRef.current) {
           playCueTone(audioContextRef.current);
         }
@@ -844,6 +858,7 @@ export default function App() {
       ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
     if (cameraStatus === 'live') setCameraStatus('idle');
+    setShowGoOverlay(false);
   };
 
   const stopSession = () => {
@@ -861,6 +876,7 @@ export default function App() {
     setAnalysis(null);
     setCurrentCue('');
     setSessionStartedAt(null);
+    setShowGoOverlay(false);
     setCurrentCue('');
     repCounterRef.current.reset();
     repEncouragementTickRef.current = 0;
@@ -1034,6 +1050,11 @@ export default function App() {
               </span>
               <span className="calibration-overlay__meter">{`${Math.round(calibrationConfidence)}% confidence`}</span>
             </div>
+            {showGoOverlay ? (
+              <div className="go-overlay" aria-hidden="true">
+                <div className="go-overlay__text">GO</div>
+              </div>
+            ) : null}
           </div>
 
           <div className="controls card">
