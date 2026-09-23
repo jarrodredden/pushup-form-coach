@@ -1042,12 +1042,11 @@ export default function App() {
       <section className="hero">
         <div className="brand-row">
           <div>
-            <p className="eyebrow">Science-fair push-up form coach</p>
-            <h1>On-device coaching for cleaner reps.</h1>
+            <p className="eyebrow">Push-up form coach</p>
+            <h1>Camera coaching for cleaner reps.</h1>
           </div>
           <div className="pill">{secureContext ? 'secure context ready' : 'needs HTTPS'}</div>
         </div>
-        <p className="lede">Rep counting, explainable scoring, and local history all run in the browser so the phone camera never leaves the device.</p>
       </section>
 
       <section className="layout">
@@ -1341,17 +1340,6 @@ export default function App() {
             </div>
           </article>
 
-          <article className="card notes-card">
-            <div className="card-head">
-              <h2>Science-fair notes</h2>
-            </div>
-            <ul className="notes">
-              <li>All pose analysis runs on-device in the browser.</li>
-              <li>Feedback modes are logged continuously so every coaching cue is auditable.</li>
-              <li>Use Head-on for the phone demo: put the phone low and in front so hands, torso, and head stay visible. Feet are optional. Side view is optional for a wider tripod setup.</li>
-              <li>Export the session as JSON or CSV for science-fair charts and comparisons.</li>
-            </ul>
-          </article>
         </div>
       </section>
 
