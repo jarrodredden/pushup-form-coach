@@ -65,6 +65,7 @@ const speechQueue: string[] = [];
 const SPEECH_QUEUE_LIMIT = 10;
 let speechVoice: SpeechSynthesisVoice | null = null;
 let speechVoiceListenerInstalled = false;
+let speechWatchdog: number | null = null;
 
 function scoreVoice(voice: SpeechSynthesisVoice) {
   const name = `${voice.name} ${voice.voiceURI}`.toLowerCase();
@@ -108,6 +109,23 @@ function speak(message: string) {
   speechQueue.push(normalized);
   if (speechBusy) return;
 
+  const recover = (current: string) => {
+    if (!current) return;
+    if (speechQueue[0] !== current) {
+      speechQueue.unshift(current);
+    }
+    speechBusy = false;
+    speechCurrent = '';
+    speechVoice = null;
+    if (speechWatchdog !== null) {
+      window.clearTimeout(speechWatchdog);
+      speechWatchdog = null;
+    }
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
   const speakNext = () => {
     if (speechBusy) return;
     const next = speechQueue.shift();
@@ -115,22 +133,38 @@ function speak(message: string) {
     speechBusy = true;
     speechCurrent = next;
     const utterance = new SpeechSynthesisUtterance(next);
-    const voice = speechVoice ?? window.speechSynthesis.getVoices().slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0] ?? null;
+    const voices = window.speechSynthesis.getVoices();
+    const fallbackVoice = voices.slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0] ?? null;
+    const voice = speechVoice ?? fallbackVoice;
     if (voice) utterance.voice = voice;
     utterance.lang = voice?.lang ?? 'en-US';
     utterance.rate = 0.98;
     utterance.pitch = 1;
     utterance.onend = () => {
+      if (speechWatchdog !== null) {
+        window.clearTimeout(speechWatchdog);
+        speechWatchdog = null;
+      }
       speechBusy = false;
       speechCurrent = '';
       speakNext();
     };
     utterance.onerror = () => {
-      speechBusy = false;
-      speechCurrent = '';
+      recover(next);
       speakNext();
     };
-    window.speechSynthesis.speak(utterance);
+    speechWatchdog = window.setTimeout(() => {
+      if (speechCurrent === next) {
+        recover(next);
+        speakNext();
+      }
+    }, 4500);
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      recover(next);
+      speakNext();
+    }
   };
 
   speakNext();
