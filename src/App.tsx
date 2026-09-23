@@ -19,7 +19,8 @@ import {
 
 const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 const POSE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
-const SESSION_STORAGE_KEY = 'pushup-form-coach-history';
+const SESSION_STORAGE_KEY = 'pushup-coach-history';
+const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 
 const cameraOptions: { label: string; value: CameraFacing }[] = [
@@ -178,7 +179,16 @@ export default function App() {
   const [reps, setReps] = useState(0);
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
-  const [history, setHistory] = useState<SessionEntry[]>(() => loadHistory(SESSION_STORAGE_KEY));
+  const [history, setHistory] = useState<SessionEntry[]>(() => {
+    const stored = loadHistory(SESSION_STORAGE_KEY);
+    if (stored.length) return stored;
+    const legacy = loadHistory(LEGACY_SESSION_STORAGE_KEY);
+    if (legacy.length) {
+      saveHistory(SESSION_STORAGE_KEY, legacy);
+      return legacy;
+    }
+    return [];
+  });
   const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [sessionStopped, setSessionStopped] = useState(false);
@@ -855,6 +865,21 @@ export default function App() {
     pushLog('system', 'Session saved locally.');
   };
 
+  const deleteHistoryEntry = (id: string) => {
+    const nextHistory = history.filter((entry) => entry.id !== id);
+    setHistory(nextHistory);
+    saveHistory(SESSION_STORAGE_KEY, nextHistory);
+    pushLog('system', 'Deleted a saved session.');
+  };
+
+  const clearHistory = () => {
+    if (!history.length) return;
+    setHistory([]);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+    pushLog('system', 'Cleared saved sessions.');
+  };
+
   const exportNotes = () => {
     if (!sessionReps.length && !analysis) return;
     const summary = buildSessionSummary();
@@ -1247,25 +1272,46 @@ export default function App() {
           <article className="card history-card">
             <div className="card-head">
               <h2>Local score history</h2>
-              <span>Saved in this browser</span>
+              <span>Saved on this device only</span>
+            </div>
+            <div className="history-actions">
+              <button className="button" onClick={clearHistory} disabled={!history.length}>
+                Clear all
+              </button>
+              <span className="muted">{history.length ? `${history.length} saved` : 'No saved sessions yet.'}</span>
             </div>
             <div className="history-list">
-              {history.length === 0 ? (
-                <p className="muted">No saved sessions yet.</p>
-              ) : (
-                history.map((entry) => (
-                  <div key={entry.id} className="history-item">
+              {history.length === 0 ? null : history.map((entry) => (
+                <details key={entry.id} className="history-item">
+                  <summary className="history-item__summary">
                     <div>
                       <strong>{entry.name}</strong>
                       <span>{new Date(entry.createdAt).toLocaleString()}</span>
                     </div>
-                    <div>
+                    <div className="history-item__stats">
                       <strong>{entry.reps} reps</strong>
                       <span>{entry.afterScore} / 100 · {entry.cameraView}</span>
                     </div>
+                  </summary>
+                  <div className="history-item__body">
+                    <div className="history-item__notes">
+                      <strong>Notes</strong>
+                      {entry.notes.length ? (
+                        <ul>
+                          {entry.notes.map((note, index) => (
+                            <li key={`${entry.id}-${index}`}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="muted">No notes yet.</p>
+                      )}
+                    </div>
+                    <button className="button" onClick={() => deleteHistoryEntry(entry.id)}>
+                      Delete
+                    </button>
                   </div>
-                ))
-              )}
+                </details>
+              ))}
             </div>
           </article>
 
