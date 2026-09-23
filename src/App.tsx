@@ -431,9 +431,11 @@ export default function App() {
 
   const buildCoachingIssues = (frame: PoseAnalysis) => {
     const issues: Array<{ key: CoachingIssueKey; cue: string }> = [];
+    const counting = calibrationStateRef.current === 'counting';
     const setupCue = frame.setupHint ?? 'Move back so hands, torso, and head stay in frame.';
-    const setupNeeded =
-      frame.viewMode === 'head-on'
+    const setupNeeded = counting
+      ? frame.confidence < 0.32 || frame.framingScore < 20
+      : frame.viewMode === 'head-on'
         ? frame.confidence < 0.72 || frame.framingScore < 64 || frame.handStackScore < 72
         : frame.confidence < 0.7 || frame.framingScore < 62 || frame.handStackScore < 72;
     if (setupNeeded) {
@@ -603,7 +605,10 @@ export default function App() {
     confidenceSmoothRef.current = smoothConfidence;
     setCalibrationConfidence(Math.round(smoothConfidence * 100));
 
-    const failureText = getRequiredFailureText(frame);
+    const isCounting = calibrationStateRef.current === 'counting';
+    const lostTrackingText = 'MOVE BACK: Body lost';
+    const lostTracking = frame.confidence < 0.32 || frame.framingScore < 20;
+    const failureText = isCounting ? (lostTracking ? lostTrackingText : null) : getRequiredFailureText(frame);
     if (failureText) {
       if (activeFailureRef.current.text === failureText) {
         activeFailureRef.current.frames += 1;
