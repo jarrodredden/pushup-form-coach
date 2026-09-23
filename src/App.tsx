@@ -359,7 +359,7 @@ export default function App() {
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current;
     if (canSpeakCountdown && audioContextRef.current) {
-      speak('5');
+      speak('Get ready!');
     }
     countdownTimerRef.current = window.setInterval(() => {
       countdown -= 1;
@@ -381,7 +381,8 @@ export default function App() {
       setCurrentCue('go');
       if (canSpeakCountdown && audioContextRef.current) {
         playCueTone(audioContextRef.current);
-        speak('go');
+        speak(`Let's get started!`);
+        speak('Go!');
       }
     }, 1000);
   };

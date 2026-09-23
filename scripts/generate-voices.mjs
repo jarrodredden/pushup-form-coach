@@ -33,9 +33,11 @@ const tips = [
 ];
 
 const files = [
-  ['ready', 'Ready'],
-  ['go', 'Go'],
-  ...Array.from({ length: 5 }, (_, i) => [`countdown-${i + 1}`, String(i + 1)]),
+  ['ready', 'Ready!'],
+  ['get-ready', 'Get ready!'],
+  ['lets-get-started', `Let's get started!`],
+  ['go', 'Go!'],
+  ...Array.from({ length: 5 }, (_, i) => [`countdown-${i + 1}`, `${i + 1}!`]),
   ...Array.from({ length: 20 }, (_, i) => [`rep-${i + 1}`, `Rep ${i + 1}`]),
   ...tips.map((text) => [slugify(text), text]),
   ...Object.entries(encouragements).flatMap(([, phrases]) => phrases.map((text) => [slugify(text), text])),
