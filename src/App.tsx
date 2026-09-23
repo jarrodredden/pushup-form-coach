@@ -351,14 +351,22 @@ export default function App() {
     if (calibrationState === 'counting' || countdownTimerRef.current !== null) return;
     clearCalibrationTimers();
     setCalibrationState('countdown');
-    setCountdownValue(3);
-    setCurrentCue('Begin in 3');
-    let countdown = 3;
+    setCountdownValue(5);
+    setCurrentCue('5');
+    let countdown = 5;
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+    const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current;
+    if (canSpeakCountdown && audioContextRef.current) {
+      speak('5');
+    }
     countdownTimerRef.current = window.setInterval(() => {
       countdown -= 1;
       if (countdown > 0) {
         setCountdownValue(countdown);
-        setCurrentCue(`Begin in ${countdown}`);
+        setCurrentCue(String(countdown));
+        if (canSpeakCountdown && audioContextRef.current) {
+          speak(String(countdown));
+        }
         return;
       }
 
@@ -368,11 +376,10 @@ export default function App() {
       repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
       repAccumulatorRef.current = createEmptyRepAccumulator();
       pushLog('info', 'Calibration complete. Counting started.');
-      setCurrentCue('Begin now.');
-      const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-      if (currentModeAllowsAudio && audioUnlockedRef.current && audioContextRef.current) {
+      setCurrentCue('go');
+      if (canSpeakCountdown && audioContextRef.current) {
         playCueTone(audioContextRef.current);
-        speak('Start push-ups');
+        speak('go');
       }
     }, 1000);
   };
@@ -1259,7 +1266,7 @@ export default function App() {
                 ? analysis.notes
                 : [
                     calibrationStatusText,
-                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Enable sound once before the first audio cue on iPhone Safari.') : 'No visual coaching in Control mode.',
+                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Start sound for a spoken countdown on iPhone Safari.') : 'No visual coaching in Control mode.',
                     cameraView === 'head-on' ? 'Head-on is the recommended mobile demo.' : 'Side view is optional and needs a wider tripod setup.',
                   ]).slice(0, 3).map((note) => (
                 <li key={note}>{note}</li>
