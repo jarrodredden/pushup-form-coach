@@ -44,6 +44,7 @@ describe('notes export', () => {
     expect(notes).toContain('View: head-on');
     expect(notes).toContain('Top coaching themes:');
     expect(notes).toContain('Depth');
+    expect(notes).not.toMatch(/feet/i);
     expect(notes).not.toContain('rep_index');
   });
 });

@@ -3,6 +3,7 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { createDemoPose } from './lib/demo';
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
+import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
 import {
@@ -153,7 +154,7 @@ export default function App() {
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
   const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
-  const repCountRef = useRef(0);
+  const repCounterRef = useRef(createRepCounter());
   const coachingFocusRef = useRef<{ key: CoachingIssueKey | null; resolvedAt: number | null; cue: string }>({
     key: null,
     resolvedAt: null,
@@ -214,7 +215,7 @@ export default function App() {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
   useEffect(() => {
-    repCountRef.current = reps;
+    repCounterRef.current.current = reps;
   }, [reps]);
   useEffect(() => {
     if (calibrationState !== 'checking') {
@@ -618,8 +619,7 @@ export default function App() {
   };
 
   const finishRep = (analysisFrame: PoseAnalysis) => {
-    const nextRepIndex = repCountRef.current + 1;
-    repCountRef.current = nextRepIndex;
+    const nextRepIndex = repCounterRef.current.next();
     const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, nextRepIndex);
     if (!rep) return;
     setReps(nextRepIndex);
@@ -848,7 +848,7 @@ export default function App() {
     setSessionStopped(false);
     setAudioUnlocked(false);
     setCurrentCue('');
-    repCountRef.current = 0;
+    repCounterRef.current.reset();
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
     frameCounterRef.current = 0;

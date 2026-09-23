@@ -84,8 +84,8 @@ function framingHint(landmarks: PosePoint[] | undefined, viewMode: CameraViewMod
     if (headVisible < 0.35) return 'Raise the phone so the head stays visible.';
     return null;
   }
-  if (wristsVisible < 0.4 && anklesVisible < 0.4) return 'Use a wider side setup so wrists and feet stay visible.';
-  if (anklesVisible < 0.45) return 'Back the phone up a little so the feet stay in frame.';
+  if (wristsVisible < 0.4 && anklesVisible < 0.4) return 'Use a wider side setup so wrists, hips, and shoulders stay visible.';
+  if (anklesVisible < 0.45) return 'Back the phone up a little so the body stays in frame.';
   return null;
 }
 
@@ -94,7 +94,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   if (!landmarks?.length || confidence < MIN_SIGNAL) {
     const setupHint = viewMode === 'head-on'
       ? 'Move back until hands, torso, and head are visible for the front-view demo.'
-      : 'Move far enough back that the full side profile and feet stay visible.';
+      : 'Move far enough back that the full side profile stays visible.';
     return {
       viewMode,
       overallScore: 0,
