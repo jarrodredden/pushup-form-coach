@@ -678,7 +678,10 @@ export default function App() {
       handStack: repAccumulatorRef.current.handStack + frame.handStackScore,
       bestOverall: Math.max(repAccumulatorRef.current.bestOverall, frame.overallScore),
       worstOverall: repAccumulatorRef.current.samples === 0 ? frame.overallScore : Math.min(repAccumulatorRef.current.worstOverall, frame.overallScore),
-      notes: [...new Set([...repAccumulatorRef.current.notes, ...frame.notes])].slice(0, 8),
+      notes: [...new Set([
+        ...repAccumulatorRef.current.notes,
+        ...frame.notes.filter((note) => note !== frame.setupHint),
+      ])].slice(0, 8),
     };
 
     if (elbowAngle <= downThreshold) {

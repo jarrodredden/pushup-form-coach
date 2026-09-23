@@ -284,6 +284,9 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
   const hipSag = accumulator.hipSag / accumulator.samples;
   const hipPike = accumulator.hipPike / accumulator.samples;
   const handStack = accumulator.handStack / accumulator.samples;
+  const analysisNotes = analysis.setupHint
+    ? analysis.notes.filter((note) => note !== analysis.setupHint)
+    : analysis.notes;
 
   const score =
     analysis.viewMode === 'side'
@@ -294,7 +297,7 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
     index,
     viewMode: analysis.viewMode,
     score,
-    notes: [...new Set([...accumulator.notes, ...analysis.notes])].slice(0, 6),
+    notes: [...new Set([...accumulator.notes, ...analysisNotes])].slice(0, 6),
     elbowDepthScore: Math.round(depth),
     bodyLineScore: Math.round(bodyLine || analysis.bodyLineScore),
     elbowFlareScore: Math.round(elbowFlare),
