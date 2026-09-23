@@ -1071,6 +1071,18 @@ export default function App() {
               </label>
             </div>
 
+            <div className="session-action-row">
+              {cameraStatus === 'live' ? (
+                <button className="button button--primary button--stop" onClick={stopSession}>
+                  Stop session
+                </button>
+              ) : sessionReps.length || analysis ? (
+                <button className="button button--primary" onClick={resetSet}>
+                  Try again
+                </button>
+              ) : null}
+            </div>
+
             <div className="action-row">
               {modeAllowsAudio ? (
                 <button
@@ -1089,16 +1101,6 @@ export default function App() {
               >
                 {spokenCoachingEnabled ? 'Form coaching (spoken): on' : 'Form coaching (spoken): off'}
               </button>
-              {cameraStatus === 'live' ? (
-                <button className="button button--primary button--stop" onClick={stopSession}>
-                  Stop
-                </button>
-              ) : null}
-              {cameraStatus !== 'live' && (sessionReps.length || analysis) ? (
-                <button className="button button--primary" onClick={resetSet}>
-                  Try again
-                </button>
-              ) : null}
             </div>
 
             <div className="action-row secondary">
