@@ -16,6 +16,8 @@ A science-fair push-up coach that runs entirely in the browser.
   - visual
   - audio
   - combined
+- Includes a guided **Coaching session** workflow that runs two 5-rep attempts with a visual/text coaching break in between
+- Supports a local **Admin baseline** recorder for front, back, side, and top reference angles
 - Includes a camera view switch:
   - **Head-on** is the recommended phone demo and the default on first load
   - **Side** is optional for a wider tripod setup
@@ -23,7 +25,7 @@ A science-fair push-up coach that runs entirely in the browser.
 - Keeps always-on logs for camera, cues, and reps
 - Saves local score history by athlete name
 - Exports the current session as CSV or JSON
-- Includes a demo mode for quick testing without a camera
+- Includes an admin-style baseline capture tool for science-fair demos
 
 ## Run locally
 
@@ -74,6 +76,36 @@ Suggested demo flow:
 4. Show the live rep counter and metric bars.
 5. Stop the set and compare the before/after scores.
 6. Export the session for charts or a poster board.
+
+### Coaching session workflow
+
+- Choose **Coaching session** before starting the camera.
+- Attempt 1 is exactly 5 push-ups.
+- The app pauses for live visual coaching and a short text summary.
+- Tap **Start attempt 2** for the second 5-rep set.
+- The coaching card shows the attempt scores and the delta.
+
+### Admin baseline
+
+- Toggle **Admin mode** in the baseline card.
+- Pick an angle: front, back, side, or top.
+- Hold a good rep in frame and tap **Save current baseline**.
+- The baseline is stored locally for this browser and used to bias grading until replaced.
+
+### Supabase setup
+
+If Vercel environment variables are available, add:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+The repo includes a starter migration at `supabase/migrations/0001_init.sql` for:
+
+- `profiles` with `role` (`admin` or `standard_user`)
+- `baselines` with per-angle JSON pose data
+- `session_results` for saved attempts
+
+If the Supabase env vars are missing, the app still works with the local coaching workflow and local baseline storage.
 
 ## Build
 

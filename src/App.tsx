@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
+import { blendBaselineScore, createBaselineReference, loadBaselines, saveBaselines } from './lib/baselineStorage';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
@@ -188,6 +189,9 @@ export default function App() {
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('free');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
+  const [adminMode, setAdminMode] = useState(false);
+  const [baselineAngle, setBaselineAngle] = useState<'front' | 'back' | 'side' | 'top'>('front');
+  const [baselines, setBaselines] = useState(() => loadBaselines());
   const [history, setHistory] = useState<SessionEntry[]>(() => {
     const stored = loadHistory(SESSION_STORAGE_KEY);
     if (stored.length) return stored;
@@ -236,6 +240,9 @@ export default function App() {
   useEffect(() => {
     coachingPausedRef.current = coachingPaused;
   }, [coachingPaused]);
+  useEffect(() => {
+    saveBaselines(baselines);
+  }, [baselines]);
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
@@ -307,6 +314,21 @@ export default function App() {
     if (!summary.length) summary.push('Looks strong — keep the same shape and depth.');
     return summary;
   }, [coachingTrialState, sessionReps]);
+
+  const applyBaselineBias = (frame: PoseAnalysis): PoseAnalysis => {
+    const reference = baselines.references[frame.viewMode === 'side' ? 'side' : baselineAngle];
+    if (!reference) return frame;
+    return {
+      ...frame,
+      overallScore: blendBaselineScore(frame.overallScore, reference.bodyLineScore ? reference.bodyLineScore : null, 16),
+      elbowDepthScore: blendBaselineScore(frame.elbowDepthScore, reference.elbowDepthScore, 12),
+      bodyLineScore: blendBaselineScore(frame.bodyLineScore, reference.bodyLineScore, 12),
+      elbowFlareScore: blendBaselineScore(frame.elbowFlareScore, reference.elbowFlareScore, 10),
+      handStackScore: blendBaselineScore(frame.handStackScore, reference.handStackScore, 10),
+      headAlignmentScore: blendBaselineScore(frame.headAlignmentScore, reference.headAlignmentScore, 10),
+      framingScore: blendBaselineScore(frame.framingScore, reference.framingScore, 10),
+    };
+  };
 
   const beforeAfter = useMemo(() => {
     const before = baselineScore ?? history.filter((item) => item.name === athleteName.trim()).at(-1)?.afterScore ?? 0;
@@ -966,7 +988,7 @@ export default function App() {
           const result = poseRef.current.detectForVideo(videoEl, performance.now());
           const landmarks = result.landmarks[0] as PosePoint[] | undefined;
           drawSkeleton(modeAllowsVisuals ? landmarks : null);
-          const frame = analyzePose(landmarks, cameraView);
+          const frame = applyBaselineBias(analyzePose(landmarks, cameraView));
           processAnalysis(frame);
         }
         rafRef.current = requestAnimationFrame(loop);
@@ -1289,6 +1311,62 @@ export default function App() {
               <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
                 Export CSV
               </button>
+            </div>
+
+            <div className="card coaching-flow-card">
+              <div className="card-head">
+                <h2>Admin baseline</h2>
+                <button className="button" onClick={() => setAdminMode((value) => !value)}>
+                  {adminMode ? 'Admin on' : 'Admin mode'}
+                </button>
+              </div>
+              <p className="muted">Capture a good reference per angle. The app stores it locally today and can sync to Supabase later.</p>
+              <div className="control-row">
+                {(['front', 'back', 'side', 'top'] as const).map((angle) => (
+                  <button key={angle} className={baselineAngle === angle ? 'button button--active' : 'button'} onClick={() => setBaselineAngle(angle)}>
+                    {angle}
+                  </button>
+                ))}
+              </div>
+              <div className="action-row">
+                <button
+                  className="button button--primary"
+                  disabled={!adminMode || !analysis}
+                  onClick={() => {
+                    if (!analysis) return;
+                    setBaselines((current) => ({
+                      updatedAt: nowIso(),
+                      references: {
+                        ...current.references,
+                        [baselineAngle]: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
+                      },
+                    }));
+                    pushLog('system', `Saved ${baselineAngle} baseline locally.`);
+                  }}
+                >
+                  Save current baseline
+                </button>
+                <button
+                  className="button"
+                  disabled={!adminMode}
+                  onClick={() => {
+                    setBaselines({
+                      updatedAt: nowIso(),
+                      references: { front: null, back: null, side: null, top: null },
+                    });
+                    pushLog('system', 'Cleared local baselines.');
+                  }}
+                >
+                  Clear baselines
+                </button>
+              </div>
+              <div className="summary-list">
+                {(['front', 'back', 'side', 'top'] as const).map((angle) => (
+                  <div key={angle} className="muted">
+                    {angle}: {baselines.references[angle] ? 'saved' : 'empty'}
+                  </div>
+                ))}
+              </div>
             </div>
 
             {workflowMode === 'coaching' ? (

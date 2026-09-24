@@ -95,3 +95,26 @@ export interface SessionSummary {
   afterScore: number;
   notes: string[];
 }
+
+export type BaselineAngle = 'front' | 'back' | 'side' | 'top';
+
+export interface BaselinePoseReference {
+  angle: BaselineAngle;
+  createdAt: string;
+  label: string;
+  elbowDepthScore: number;
+  bodyLineScore: number;
+  elbowFlareScore: number;
+  handStackScore: number;
+  headAlignmentScore: number;
+  framingScore: number;
+  hipSagScore: number | null;
+  hipPikeScore: number | null;
+  confidence: number;
+  notes: string[];
+}
+
+export interface SavedBaselines {
+  updatedAt: string;
+  references: Record<BaselineAngle, BaselinePoseReference | null>;
+}
