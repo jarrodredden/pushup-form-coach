@@ -7,6 +7,34 @@ const emptyBaselines = (): SavedBaselines => ({
   references: { front: null, back: null, side: null, top: null },
 });
 
+function normalizeReference(reference: BaselinePoseReference | null): BaselinePoseReference | null {
+  if (!reference) return null;
+  if (reference.targets && reference.tolerances) return reference;
+  return {
+    ...reference,
+    targets: {
+      elbowDepthScore: reference.elbowDepthScore,
+      bodyLineScore: reference.bodyLineScore,
+      elbowFlareScore: reference.elbowFlareScore,
+      handStackScore: reference.handStackScore,
+      headAlignmentScore: reference.headAlignmentScore,
+      framingScore: reference.framingScore,
+      hipSagScore: reference.hipSagScore,
+      hipPikeScore: reference.hipPikeScore,
+    },
+    tolerances: {
+      elbowDepthScore: 12,
+      bodyLineScore: 12,
+      elbowFlareScore: 12,
+      handStackScore: 12,
+      headAlignmentScore: 12,
+      framingScore: 15,
+      hipSagScore: 12,
+      hipPikeScore: 12,
+    },
+  };
+}
+
 export function loadBaselines(): SavedBaselines {
   try {
     const raw = localStorage.getItem(BASELINE_STORAGE_KEY);
@@ -15,10 +43,10 @@ export function loadBaselines(): SavedBaselines {
     return {
       updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
       references: {
-        front: parsed.references?.front ?? null,
-        back: parsed.references?.back ?? null,
-        side: parsed.references?.side ?? null,
-        top: parsed.references?.top ?? null,
+        front: normalizeReference(parsed.references?.front ?? null),
+        back: normalizeReference(parsed.references?.back ?? null),
+        side: normalizeReference(parsed.references?.side ?? null),
+        top: normalizeReference(parsed.references?.top ?? null),
       },
     };
   } catch {
@@ -31,10 +59,7 @@ export function saveBaselines(baselines: SavedBaselines) {
 }
 
 export function createBaselineReference(angle: BaselineAngle, analysis: PoseAnalysis, label: string): BaselinePoseReference {
-  return {
-    angle,
-    createdAt: new Date().toISOString(),
-    label,
+  const targets = {
     elbowDepthScore: analysis.elbowDepthScore,
     bodyLineScore: analysis.bodyLineScore,
     elbowFlareScore: analysis.elbowFlareScore,
@@ -43,14 +68,38 @@ export function createBaselineReference(angle: BaselineAngle, analysis: PoseAnal
     framingScore: analysis.framingScore,
     hipSagScore: analysis.hipSagScore,
     hipPikeScore: analysis.hipPikeScore,
+  };
+  return {
+    angle,
+    createdAt: new Date().toISOString(),
+    label,
+    targets,
+    tolerances: {
+      elbowDepthScore: 12,
+      bodyLineScore: 12,
+      elbowFlareScore: 12,
+      handStackScore: 12,
+      headAlignmentScore: 12,
+      framingScore: 15,
+      hipSagScore: 12,
+      hipPikeScore: 12,
+    },
+    elbowDepthScore: targets.elbowDepthScore,
+    bodyLineScore: targets.bodyLineScore,
+    elbowFlareScore: targets.elbowFlareScore,
+    handStackScore: targets.handStackScore,
+    headAlignmentScore: targets.headAlignmentScore,
+    framingScore: targets.framingScore,
+    hipSagScore: targets.hipSagScore,
+    hipPikeScore: targets.hipPikeScore,
     confidence: analysis.confidence,
     notes: analysis.notes,
   };
 }
 
-export function blendBaselineScore(actual: number, baseline: number | null, tolerance = 12) {
-  if (baseline === null) return actual;
-  const delta = actual - baseline;
-  const adjusted = actual + Math.max(-tolerance, Math.min(tolerance, delta)) * 0.35;
-  return Math.round(Math.max(0, Math.min(100, adjusted)));
+export function scoreAgainstBaseline(actual: number, target: number | null, tolerance = 12) {
+  if (target === null) return actual;
+  const delta = Math.abs(actual - target);
+  const score = 100 - Math.min(100, (delta / Math.max(tolerance, 1)) * 100);
+  return Math.round(Math.max(0, Math.min(100, score)));
 }

@@ -102,6 +102,26 @@ export interface BaselinePoseReference {
   angle: BaselineAngle;
   createdAt: string;
   label: string;
+  targets: {
+    elbowDepthScore: number;
+    bodyLineScore: number;
+    elbowFlareScore: number;
+    handStackScore: number;
+    headAlignmentScore: number;
+    framingScore: number;
+    hipSagScore: number | null;
+    hipPikeScore: number | null;
+  };
+  tolerances: {
+    elbowDepthScore: number;
+    bodyLineScore: number;
+    elbowFlareScore: number;
+    handStackScore: number;
+    headAlignmentScore: number;
+    framingScore: number;
+    hipSagScore: number;
+    hipPikeScore: number;
+  };
   elbowDepthScore: number;
   bodyLineScore: number;
   elbowFlareScore: number;

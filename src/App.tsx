@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
-import { blendBaselineScore, createBaselineReference, loadBaselines, saveBaselines } from './lib/baselineStorage';
+import { createBaselineReference, loadBaselines, saveBaselines, scoreAgainstBaseline } from './lib/baselineStorage';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
@@ -199,6 +199,7 @@ export default function App() {
   const [uploadingResult, setUploadingResult] = useState(false);
   const [baselineAngle, setBaselineAngle] = useState<'front' | 'back' | 'side' | 'top'>('front');
   const [baselines, setBaselines] = useState(() => loadBaselines());
+  const [baselineDraft, setBaselineDraft] = useState(() => loadBaselines().references.front);
   const [history, setHistory] = useState<SessionEntry[]>(() => {
     const stored = loadHistory(SESSION_STORAGE_KEY);
     if (stored.length) return stored;
@@ -256,6 +257,26 @@ export default function App() {
   useEffect(() => {
     saveBaselines(baselines);
   }, [baselines]);
+  useEffect(() => {
+    setBaselineDraft(baselines.references[baselineAngle] ?? createBaselineReference(baselineAngle, analysis ?? {
+      viewMode: cameraView,
+      overallScore: 100,
+      elbowAngle: 180,
+      elbowDepthScore: 100,
+      bodyLineScore: 100,
+      elbowFlareScore: 100,
+      handStackScore: 100,
+      headAlignmentScore: 100,
+      framingScore: 100,
+      hipSagScore: null,
+      hipPikeScore: null,
+      confidence: 1,
+      phase: 'unknown',
+      setupHint: null,
+      notes: [],
+    }, `${baselineAngle} baseline`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baselineAngle, baselines.references]);
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
@@ -331,15 +352,25 @@ export default function App() {
   const applyBaselineBias = (frame: PoseAnalysis): PoseAnalysis => {
     const reference = baselines.references[frame.viewMode === 'side' ? 'side' : baselineAngle];
     if (!reference) return frame;
+    const score = (actual: number, target: number | null, tolerance = 12) => scoreAgainstBaseline(actual, target, tolerance);
     return {
       ...frame,
-      overallScore: blendBaselineScore(frame.overallScore, reference.bodyLineScore ? reference.bodyLineScore : null, 16),
-      elbowDepthScore: blendBaselineScore(frame.elbowDepthScore, reference.elbowDepthScore, 12),
-      bodyLineScore: blendBaselineScore(frame.bodyLineScore, reference.bodyLineScore, 12),
-      elbowFlareScore: blendBaselineScore(frame.elbowFlareScore, reference.elbowFlareScore, 10),
-      handStackScore: blendBaselineScore(frame.handStackScore, reference.handStackScore, 10),
-      headAlignmentScore: blendBaselineScore(frame.headAlignmentScore, reference.headAlignmentScore, 10),
-      framingScore: blendBaselineScore(frame.framingScore, reference.framingScore, 10),
+      overallScore: Math.round(
+        (
+          score(frame.elbowDepthScore, reference.targets.elbowDepthScore, reference.tolerances.elbowDepthScore) * 0.35 +
+          score(frame.bodyLineScore, reference.targets.bodyLineScore, reference.tolerances.bodyLineScore) * 0.3 +
+          score(frame.elbowFlareScore, reference.targets.elbowFlareScore, reference.tolerances.elbowFlareScore) * 0.12 +
+          score(frame.handStackScore, reference.targets.handStackScore, reference.tolerances.handStackScore) * 0.1 +
+          score(frame.headAlignmentScore, reference.targets.headAlignmentScore, reference.tolerances.headAlignmentScore) * 0.08 +
+          score(frame.framingScore, reference.targets.framingScore, reference.tolerances.framingScore) * 0.05
+        ),
+      ),
+      elbowDepthScore: score(frame.elbowDepthScore, reference.targets.elbowDepthScore, reference.tolerances.elbowDepthScore),
+      bodyLineScore: score(frame.bodyLineScore, reference.targets.bodyLineScore, reference.tolerances.bodyLineScore),
+      elbowFlareScore: score(frame.elbowFlareScore, reference.targets.elbowFlareScore, reference.tolerances.elbowFlareScore),
+      handStackScore: score(frame.handStackScore, reference.targets.handStackScore, reference.tolerances.handStackScore),
+      headAlignmentScore: score(frame.headAlignmentScore, reference.targets.headAlignmentScore, reference.tolerances.headAlignmentScore),
+      framingScore: score(frame.framingScore, reference.targets.framingScore, reference.tolerances.framingScore),
     };
   };
 
@@ -1449,21 +1480,33 @@ export default function App() {
               </div>
               <div className="action-row">
                 <button
-                  className="button button--primary"
+                  className="button"
                   disabled={!canManageBaselines || !analysis}
                   onClick={() => {
                     if (!analysis) return;
+                    const seeded = createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`);
+                    setBaselineDraft(seeded);
+                    pushLog('system', `Seeded ${baselineAngle} draft from current pose.`);
+                  }}
+                >
+                  Use current pose as draft
+                </button>
+                <button
+                  className="button button--primary"
+                  disabled={!canManageBaselines || !baselineDraft}
+                  onClick={() => {
+                    if (!baselineDraft) return;
                     setBaselines((current) => ({
                       updatedAt: nowIso(),
                       references: {
                         ...current.references,
-                        [baselineAngle]: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
+                        [baselineAngle]: baselineDraft,
                       },
                     }));
-                    pushLog('system', `Saved ${baselineAngle} baseline locally.`);
+                    pushLog('system', `Saved ${baselineAngle} 100-standard locally.`);
                   }}
                 >
-                  Save current baseline
+                  Save 100 standard
                 </button>
                 <button
                   className="button"
@@ -1479,10 +1522,84 @@ export default function App() {
                   Clear baselines
                 </button>
               </div>
+              <div className="baseline-editor">
+                <div className="baseline-editor__grid">
+                  {[
+                    ['elbowDepthScore', 'Elbow depth target', 0, 100],
+                    ['bodyLineScore', 'Body line target', 0, 100],
+                    ['elbowFlareScore', 'Elbow flare target', 0, 100],
+                    ['handStackScore', 'Hands stacked target', 0, 100],
+                    ['headAlignmentScore', 'Head alignment target', 0, 100],
+                    ['framingScore', 'Framing target', 0, 100],
+                    ['hipSagScore', 'Hip sag target', 0, 100],
+                    ['hipPikeScore', 'Hip pike target', 0, 100],
+                  ].map(([key, label, min, max]) => (
+                    <label key={key as string}>
+                      {label}
+                      <input
+                        type="number"
+                        min={min}
+                        max={max}
+                        value={baselineDraft?.targets?.[key as keyof typeof baselineDraft.targets] ?? ''}
+                        onChange={(event) => {
+                          const value = event.target.value === '' ? null : Number(event.target.value);
+                          setBaselineDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  targets: {
+                                    ...current.targets,
+                                    [key]: value,
+                                  },
+                                }
+                              : current,
+                          );
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="baseline-editor__grid">
+                  {[
+                    ['elbowDepthScore', 'Depth tolerance', 1, 50],
+                    ['bodyLineScore', 'Body line tolerance', 1, 50],
+                    ['elbowFlareScore', 'Elbow flare tolerance', 1, 50],
+                    ['handStackScore', 'Hands stacked tolerance', 1, 50],
+                    ['headAlignmentScore', 'Head alignment tolerance', 1, 50],
+                    ['framingScore', 'Framing tolerance', 1, 50],
+                    ['hipSagScore', 'Hip sag tolerance', 1, 50],
+                    ['hipPikeScore', 'Hip pike tolerance', 1, 50],
+                  ].map(([key, label, min, max]) => (
+                    <label key={`${key as string}-tol`}>
+                      {label}
+                      <input
+                        type="number"
+                        min={min}
+                        max={max}
+                        value={baselineDraft?.tolerances?.[key as keyof typeof baselineDraft.tolerances] ?? ''}
+                        onChange={(event) => {
+                          const value = event.target.value === '' ? null : Number(event.target.value);
+                          setBaselineDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  tolerances: {
+                                    ...current.tolerances,
+                                    [key]: value,
+                                  },
+                                }
+                              : current,
+                          );
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
               <div className="summary-list">
                 {(['front', 'back', 'side', 'top'] as const).map((angle) => (
                   <div key={angle} className="muted">
-                    {angle}: {baselines.references[angle] ? 'saved' : 'empty'}
+                    {angle}: {baselines.references[angle] ? 'saved 100 standard' : 'empty'}
                   </div>
                 ))}
               </div>
