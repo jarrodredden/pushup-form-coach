@@ -6,7 +6,6 @@ import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
-import { supabase, supabaseEnabled, type AuthSession } from './lib/supabaseClient';
 import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
 import {
   CameraFacing,
@@ -26,6 +25,7 @@ const SESSION_STORAGE_KEY = 'pushup-coach-history';
 const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
+const RESULTS_UPLOAD_URL = import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined;
 
 const cameraOptions: { label: string; value: CameraFacing }[] = [
   { label: 'Front camera', value: 'user' },
@@ -55,7 +55,6 @@ const feedbackOptions: { label: string; value: FeedbackMode }[] = [
 type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
 type WorkflowMode = 'free' | 'coaching';
 type CoachingTrialState = 'idle' | 'attempt-1' | 'between-attempts' | 'attempt-2' | 'complete';
-type UserRole = 'admin' | 'standard_user' | 'local_admin';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const qualityLabel = (value: number) => {
@@ -191,14 +190,11 @@ export default function App() {
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('free');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
-  const [adminMode, setAdminMode] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authMessage, setAuthMessage] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [authRole, setAuthRole] = useState<UserRole>('local_admin');
-  const [authReady, setAuthReady] = useState(!supabaseEnabled);
+  const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem('pushup-admin-pin-unlocked') === '1');
+  const [adminPin, setAdminPin] = useState('');
+  const [pinMessage, setPinMessage] = useState('');
+  const [uploadMessage, setUploadMessage] = useState('');
+  const [uploadingResult, setUploadingResult] = useState(false);
   const [baselineAngle, setBaselineAngle] = useState<'front' | 'back' | 'side' | 'top'>('front');
   const [baselines, setBaselines] = useState(() => loadBaselines());
   const [history, setHistory] = useState<SessionEntry[]>(() => {
@@ -221,7 +217,7 @@ export default function App() {
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
-  const canManageBaselines = authRole === 'admin' || authRole === 'local_admin';
+  const canManageBaselines = adminUnlocked;
   const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
@@ -231,6 +227,7 @@ export default function App() {
   const workflowModeRef = useRef(workflowMode);
   const coachingTrialStateRef = useRef(coachingTrialState);
   const coachingPausedRef = useRef(coachingPaused);
+  const adminUnlockedRef = useRef(adminUnlocked);
   const repEncouragementTickRef = useRef(0);
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
@@ -251,37 +248,9 @@ export default function App() {
     coachingPausedRef.current = coachingPaused;
   }, [coachingPaused]);
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return;
-    }
-    const client = supabase;
-    let cancelled = false;
-    void client.auth.getSession().then(({ data }) => {
-      if (cancelled) return;
-      setAuthSession(data.session);
-      void syncProfileRole(data.session).then((role) => {
-        if (!cancelled) {
-          setAuthRole(role);
-        }
-      });
-      setAuthReady(true);
-    });
-    const { data } = client.auth.onAuthStateChange(async (_event, session) => {
-      if (cancelled) return;
-      setAuthSession(session);
-      if (session?.user) {
-        const { data: profile } = await client.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-        setAuthRole((profile?.role as UserRole | undefined) ?? 'standard_user');
-      } else {
-        setAuthRole('local_admin');
-      }
-    });
-    return () => {
-      cancelled = true;
-      data.subscription.unsubscribe();
-    };
-  }, []);
+    adminUnlockedRef.current = adminUnlocked;
+    localStorage.setItem('pushup-admin-pin-unlocked', adminUnlocked ? '1' : '0');
+  }, [adminUnlocked]);
   useEffect(() => {
     saveBaselines(baselines);
   }, [baselines]);
@@ -547,6 +516,10 @@ export default function App() {
   };
 
   const startCoachingSession = async () => {
+    if (!athleteName.trim()) {
+      setPinMessage('Enter a volunteer name before starting a coaching session.');
+      return;
+    }
     resetCoachingTrial();
     await startCamera();
   };
@@ -1094,20 +1067,64 @@ export default function App() {
 
   const saveCurrentSession = () => {
     if (!sessionReps.length && !analysis) return;
+    if (!athleteName.trim()) {
+      setUploadMessage('Enter a volunteer name before saving a result.');
+      return;
+    }
     const summary: SessionEntry = buildSessionEntry();
     const nextHistory = [summary, ...history].slice(0, 25);
     setHistory(nextHistory);
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
     setBaselineScore(summary.afterScore);
     pushLog('system', 'Session saved locally.');
-    if (supabase && authSession?.user) {
-      void supabase.from('session_results').insert({
-        user_id: authSession.user.id,
-        session_json: {
-          summary,
-          reps: sessionReps,
-        },
+  };
+
+  const buildUploadRow = () => {
+    const mode = workflowMode === 'coaching' ? 'coaching_session' : 'free_practice';
+    const attemptOne = attemptSummary(1);
+    const attemptTwo = attemptSummary(2);
+    const notesSummary = [...new Set([...(sessionReps.flatMap((rep) => rep.notes)), ...(analysis?.notes ?? [])])].slice(0, 6).join('; ');
+    return {
+      timestamp: nowIso(),
+      volunteer_name: athleteName.trim() || 'Anonymous',
+      mode,
+      attempt1_score: mode === 'coaching_session' ? attemptOne.average || '' : currentSummary.averageScore,
+      attempt2_score: mode === 'coaching_session' ? attemptTwo.average || '' : '',
+      delta: mode === 'coaching_session' ? coachingDelta : '',
+      reps: sessionReps.length || reps,
+      notes_summary: notesSummary,
+      device_user_agent: navigator.userAgent.slice(0, 120),
+    };
+  };
+
+  const uploadResult = async () => {
+    if (!RESULTS_UPLOAD_URL) {
+      setUploadMessage('Upload unavailable until VITE_RESULTS_UPLOAD_URL is configured.');
+      return;
+    }
+    if (!athleteName.trim()) {
+      setUploadMessage('Enter a volunteer name before uploading.');
+      return;
+    }
+    setUploadingResult(true);
+    setUploadMessage('');
+    try {
+      const payload = buildUploadRow();
+      const response = await fetch(RESULTS_UPLOAD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: JSON.stringify(payload),
       });
+      if (!response.ok) {
+        throw new Error(`Upload failed (${response.status})`);
+      }
+      setUploadMessage('Result uploaded to the shared sheet.');
+      pushLog('system', 'Result uploaded to Google Sheet.');
+    } catch (error) {
+      console.error(error);
+      setUploadMessage('Upload failed. Try again after checking the webhook URL.');
+    } finally {
+      setUploadingResult(false);
     }
   };
 
@@ -1126,74 +1143,22 @@ export default function App() {
     pushLog('system', 'Cleared saved sessions.');
   };
 
-  const syncProfileRole = async (session: AuthSession | null) => {
-    if (!supabase || !session?.user) return 'local_admin' as UserRole;
-    const { data } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
-    return (data?.role as UserRole | undefined) ?? 'standard_user';
+  const unlockAdminPin = () => {
+    if (adminPin.trim() === '180180') {
+      setAdminUnlocked(true);
+      setPinMessage('Admin controls unlocked on this device.');
+      setAdminPin('');
+      pushLog('system', 'Admin PIN accepted.');
+      return;
+    }
+    setPinMessage('Wrong PIN. Try again.');
+    pushLog('system', 'Admin PIN rejected.');
   };
 
-  const signIn = async () => {
-    if (!supabase) {
-      setAuthMessage('Supabase env vars are missing. Using local admin mode for the demo.');
-      setAuthRole('local_admin');
-      setAdminMode(true);
-      return;
-    }
-    setAuthLoading(true);
-    setAuthMessage('');
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: authEmail.trim(),
-      password: authPassword,
-    });
-    if (error) {
-      setAuthMessage(error.message);
-      setAuthLoading(false);
-      return;
-    }
-    const role = await syncProfileRole(data.session);
-    setAuthRole(role);
-    setAdminMode(role === 'admin');
-    setAuthMessage(`Signed in as ${role}.`);
-    setAuthLoading(false);
-  };
-
-  const signUp = async () => {
-    if (!supabase) {
-      setAuthMessage('Supabase env vars are missing. Use local admin mode for now.');
-      setAuthRole('local_admin');
-      setAdminMode(true);
-      return;
-    }
-    setAuthLoading(true);
-    setAuthMessage('');
-    const { data, error } = await supabase.auth.signUp({
-      email: authEmail.trim(),
-      password: authPassword,
-    });
-    if (error) {
-      setAuthMessage(error.message);
-      setAuthLoading(false);
-      return;
-    }
-    const role = await syncProfileRole(data.session ?? null);
-    if (data.session) {
-      setAuthRole(role);
-      setAdminMode(role === 'admin');
-      setAuthMessage(`Account created. Signed in as ${role}.`);
-    } else {
-      setAuthMessage('Account created. Check email if confirmation is enabled.');
-    }
-    setAuthLoading(false);
-  };
-
-  const signOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut();
-    }
-    setAuthSession(null);
-    setAuthRole('local_admin');
-    setAdminMode(true);
-    setAuthMessage('Signed out.');
+  const lockAdminPin = () => {
+    setAdminUnlocked(false);
+    setPinMessage('Admin controls locked.');
+    localStorage.removeItem('pushup-admin-pin-unlocked');
   };
 
   const exportNotes = () => {
@@ -1444,13 +1409,10 @@ export default function App() {
                 <button
                   className="button"
                   onClick={() => {
-                    if (!supabaseEnabled) {
-                      setAdminMode((value) => !value);
-                    }
+                    setAdminUnlocked((value) => !value);
                   }}
-                  disabled={supabaseEnabled}
                 >
-                  {adminMode ? 'Local admin on' : 'Local admin mode'}
+                  {adminUnlocked ? 'Admin unlocked' : 'Unlock admin'}
                 </button>
               </div>
               <div className="control-row">
@@ -1473,15 +1435,6 @@ export default function App() {
                         [baselineAngle]: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
                       },
                     }));
-                    if (supabase && authSession?.user && canManageBaselines) {
-                      void supabase.from('baselines').upsert({
-                        angle: baselineAngle,
-                        label: `${baselineAngle} baseline`,
-                        pose: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
-                        created_by: authSession.user.id,
-                        active: true,
-                      });
-                    }
                     pushLog('system', `Saved ${baselineAngle} baseline locally.`);
                   }}
                 >
@@ -1512,35 +1465,26 @@ export default function App() {
 
             <div className="card coaching-flow-card">
               <div className="card-head">
-                <h2>Sign in</h2>
-                <span className="pill">{authReady ? (supabaseEnabled ? 'Supabase on' : 'Local demo') : 'Loading auth'}</span>
+                <h2>Admin PIN</h2>
+                <span className="pill">{adminUnlocked ? 'unlocked' : 'locked'}</span>
               </div>
-              <p className="muted">
-                Email/password auth unlocks admin baselines and saved results. When Supabase env vars are missing, the app keeps the demo working with local admin mode.
-              </p>
+              <p className="muted">Enter the admin PIN on this device to unlock baselines and advanced controls. No cloud account required for the demo.</p>
               <div className="field-row">
                 <label>
-                  Email
-                  <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" />
-                </label>
-                <label>
-                  Password
-                  <input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="••••••••" />
+                  Admin PIN
+                  <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} placeholder="180180" inputMode="numeric" />
                 </label>
               </div>
               <div className="action-row">
-                <button className="button button--primary" disabled={authLoading} onClick={signIn}>
-                  Sign in
+                <button className="button button--primary" onClick={unlockAdminPin}>
+                  Unlock admin
                 </button>
-                <button className="button" disabled={authLoading} onClick={signUp}>
-                  Sign up
-                </button>
-                <button className="button" disabled={authLoading && !authSession} onClick={signOut}>
-                  Sign out
+                <button className="button" onClick={lockAdminPin}>
+                  Sign out admin
                 </button>
               </div>
-              <p className="muted">{authSession ? `Signed in as ${authSession.user.email ?? 'unknown'} (${authRole})` : 'Signed out'}</p>
-              {authMessage ? <p className="metric-copy">{authMessage}</p> : null}
+              <p className="muted">Volunteer name is required for coaching sessions and sheet uploads.</p>
+              <p className="metric-copy">{pinMessage || 'Admin unlock persists on this device until sign-out admin.'}</p>
             </div>
 
             {workflowMode === 'coaching' ? (
@@ -1578,6 +1522,20 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
+
+            <div className="card coaching-flow-card">
+              <div className="card-head">
+                <h2>Upload result</h2>
+                <span className="pill">{RESULTS_UPLOAD_URL ? 'sheet ready' : 'no webhook'}</span>
+              </div>
+              <p className="muted">Upload a single coaching or free-practice result row to the shared Google Sheet.</p>
+              <div className="action-row">
+                <button className="button button--primary" onClick={uploadResult} disabled={uploadingResult || (!sessionReps.length && !analysis) || !athleteName.trim()}>
+                  {uploadingResult ? 'Uploading…' : 'Upload result'}
+                </button>
+              </div>
+              <p className="metric-copy">{uploadMessage || (RESULTS_UPLOAD_URL ? 'Configured webhook will append one row per result.' : 'Upload unavailable until VITE_RESULTS_UPLOAD_URL is set.')}</p>
+            </div>
           </div>
         </div>
 

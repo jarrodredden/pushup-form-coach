@@ -18,6 +18,7 @@ A science-fair push-up coach that runs entirely in the browser.
   - combined
 - Includes a guided **Coaching session** workflow that runs two 5-rep attempts with a visual/text coaching break in between
 - Supports a local **Admin baseline** recorder for front, back, side, and top reference angles
+- Uses a local **Admin PIN** (`180180`) to unlock baseline/admin controls on this device
 - Includes a camera view switch:
   - **Head-on** is the recommended phone demo and the default on first load
   - **Side** is optional for a wider tripod setup
@@ -92,20 +93,21 @@ Suggested demo flow:
 - Hold a good rep in frame and tap **Save current baseline**.
 - The baseline is stored locally for this browser and used to bias grading until replaced.
 
-### Supabase setup
+### Google Sheet uploads
 
-If Vercel environment variables are available, add:
+The app can upload one result row to the shared sheet after a coaching session or a saved free-practice result.
 
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
+- Shared spreadsheet: `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`
+- Add `VITE_RESULTS_UPLOAD_URL` in Vercel to point at a Google Apps Script web app URL
+- Local `.env.example` includes the variable name with a placeholder
 
-The repo includes a starter migration at `supabase/migrations/0001_init.sql` for:
+The Apps Script code lives at `scripts/google-apps-script/Code.gs`.
+Deploy it as a Web App:
 
-- `profiles` with `role` (`admin` or `standard_user`)
-- `baselines` with per-angle JSON pose data
-- `session_results` for saved attempts
+- Execute as: Me
+- Who has access: Anyone
 
-If the Supabase env vars are missing, the app still works with the local coaching workflow and local baseline storage.
+The script appends a row with timestamp, volunteer name, mode, attempt scores, delta, reps, notes summary, and a short user-agent.
 
 ## Build
 
