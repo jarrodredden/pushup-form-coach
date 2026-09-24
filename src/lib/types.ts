@@ -45,6 +45,7 @@ export interface RepAccumulator {
 
 export interface SessionRep {
   index: number;
+  attempt?: number;
   viewMode: CameraViewMode;
   score: number;
   notes: string[];

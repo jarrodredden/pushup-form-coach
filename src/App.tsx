@@ -51,6 +51,8 @@ const feedbackOptions: { label: string; value: FeedbackMode }[] = [
 ];
 
 type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
+type WorkflowMode = 'free' | 'coaching';
+type CoachingTrialState = 'idle' | 'attempt-1' | 'between-attempts' | 'attempt-2' | 'complete';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const qualityLabel = (value: number) => {
@@ -183,6 +185,9 @@ export default function App() {
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
   const [spokenCoachingEnabled, setSpokenCoachingEnabled] = useState(false);
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('free');
+  const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
+  const [coachingPaused, setCoachingPaused] = useState(false);
   const [history, setHistory] = useState<SessionEntry[]>(() => {
     const stored = loadHistory(SESSION_STORAGE_KEY);
     if (stored.length) return stored;
@@ -209,6 +214,9 @@ export default function App() {
   const feedbackModeRef = useRef(feedbackMode);
   const audioUnlockedRef = useRef(audioUnlocked);
   const spokenCoachingEnabledRef = useRef(spokenCoachingEnabled);
+  const workflowModeRef = useRef(workflowMode);
+  const coachingTrialStateRef = useRef(coachingTrialState);
+  const coachingPausedRef = useRef(coachingPaused);
   const repEncouragementTickRef = useRef(0);
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
@@ -219,6 +227,15 @@ export default function App() {
   useEffect(() => {
     spokenCoachingEnabledRef.current = spokenCoachingEnabled;
   }, [spokenCoachingEnabled]);
+  useEffect(() => {
+    workflowModeRef.current = workflowMode;
+  }, [workflowMode]);
+  useEffect(() => {
+    coachingTrialStateRef.current = coachingTrialState;
+  }, [coachingTrialState]);
+  useEffect(() => {
+    coachingPausedRef.current = coachingPaused;
+  }, [coachingPaused]);
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
@@ -263,6 +280,33 @@ export default function App() {
       quality: qualityLabel(averageScore),
     };
   }, [analysis?.overallScore, sessionReps]);
+
+  const attemptReps = (attempt: 1 | 2) => sessionReps.filter((rep) => rep.attempt === attempt);
+  const attemptSummary = (attempt: 1 | 2) => {
+    const repsForAttempt = attemptReps(attempt);
+    const total = repsForAttempt.reduce((sum, rep) => sum + rep.score, 0);
+    const average = repsForAttempt.length ? Math.round(total / repsForAttempt.length) : 0;
+    return {
+      reps: repsForAttempt.length,
+      average,
+      best: repsForAttempt.reduce((best, rep) => Math.max(best, rep.score), 0),
+    };
+  };
+  const coachingAttemptOne = attemptSummary(1);
+  const coachingAttemptTwo = attemptSummary(2);
+  const coachingDelta = coachingAttemptTwo.average - coachingAttemptOne.average;
+  const coachingSummaryLines = useMemo(() => {
+    const latest = sessionReps.filter((rep) => rep.attempt === (coachingTrialState === 'complete' ? 2 : 1));
+    const avgDepth = latest.length ? latest.reduce((sum, rep) => sum + rep.elbowDepthScore, 0) / latest.length : 0;
+    const avgBody = latest.length ? latest.reduce((sum, rep) => sum + rep.bodyLineScore, 0) / latest.length : 0;
+    const avgElbows = latest.length ? latest.reduce((sum, rep) => sum + rep.elbowFlareScore, 0) / latest.length : 0;
+    const summary: string[] = [];
+    if (avgDepth < 68) summary.push('Depth: go a little deeper.');
+    if (avgBody < 74) summary.push('Body line: keep the body straighter.');
+    if (avgElbows < 72) summary.push('Elbows: tuck them in a little more.');
+    if (!summary.length) summary.push('Looks strong — keep the same shape and depth.');
+    return summary;
+  }, [coachingTrialState, sessionReps]);
 
   const beforeAfter = useMemo(() => {
     const before = baselineScore ?? history.filter((item) => item.name === athleteName.trim()).at(-1)?.afterScore ?? 0;
@@ -413,6 +457,44 @@ export default function App() {
     };
 
     countdownTimerRef.current = window.setTimeout(startCountdown, 800);
+  };
+
+  const resetCoachingTrial = () => {
+    setWorkflowMode('coaching');
+    setCoachingTrialState('attempt-1');
+    setCoachingPaused(false);
+    setSessionReps([]);
+    setSessionLogs([]);
+    setReps(0);
+    setAnalysis(null);
+    setSessionStartedAt(null);
+    repCounterRef.current.reset();
+    repEncouragementTickRef.current = 0;
+    repAccumulatorRef.current = createEmptyRepAccumulator();
+    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
+    frameCounterRef.current = 0;
+  };
+
+  const startFreePractice = async () => {
+    setWorkflowMode('free');
+    setCoachingTrialState('idle');
+    setCoachingPaused(false);
+    await startCamera();
+  };
+
+  const startCoachingSession = async () => {
+    resetCoachingTrial();
+    await startCamera();
+  };
+
+  const continueCoachingAttempt = () => {
+    setCoachingPaused(false);
+    setCoachingTrialState((current) => (current === 'between-attempts' ? 'attempt-2' : current));
+    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
+    repAccumulatorRef.current = createEmptyRepAccumulator();
+    repCounterRef.current.reset();
+    setCurrentCue('Try attempt 2.');
+    pushLog('system', 'Attempt 2 started.');
   };
 
   const unlockSound = async () => {
@@ -674,6 +756,13 @@ export default function App() {
       return;
     }
 
+    if (workflowModeRef.current === 'coaching' && coachingPausedRef.current) {
+      if (feedbackModeRef.current !== 'control') {
+        updateCoachingFocus(frame);
+      }
+      return;
+    }
+
     if (feedbackModeRef.current !== 'control') {
       updateCoachingFocus(frame);
     }
@@ -689,6 +778,10 @@ export default function App() {
     const nextRepIndex = repCounterRef.current.next();
     const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, nextRepIndex);
     if (!rep) return;
+    const nextAttempt = coachingTrialStateRef.current === 'attempt-2' ? 2 : coachingTrialStateRef.current === 'between-attempts' ? 2 : coachingTrialStateRef.current === 'idle' ? 0 : 1;
+    if (nextAttempt) {
+      rep.attempt = nextAttempt;
+    }
     setReps(nextRepIndex);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
     pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
@@ -703,6 +796,23 @@ export default function App() {
         speak(phrase);
       } else {
         speak(`Rep ${nextRepIndex}`);
+      }
+    }
+    if (workflowModeRef.current === 'coaching') {
+      const attemptNumber = rep.attempt ?? 1;
+      const attemptCount = sessionReps.filter((item) => item.attempt === attemptNumber).length + 1;
+      if (attemptNumber === 1 && attemptCount >= 5) {
+        setCoachingPaused(true);
+        setCoachingTrialState('between-attempts');
+        pushLog('system', 'Attempt 1 complete. Review coaching feedback before attempt 2.');
+        setCurrentCue('Review the coaching feedback, then start attempt 2.');
+        return;
+      }
+      if (attemptNumber === 2 && attemptCount >= 5) {
+        setCoachingPaused(true);
+        setCoachingTrialState('complete');
+        pushLog('system', 'Attempt 2 complete. Compare the results.');
+        setCurrentCue('Compare the two attempts.');
       }
     }
     repAccumulatorRef.current = createEmptyRepAccumulator();
@@ -844,6 +954,10 @@ export default function App() {
       runningRef.current = true;
       setCameraStatus('live');
             setSessionStartedAt((current) => current ?? nowIso());
+      if (workflowModeRef.current === 'coaching') {
+        setCoachingTrialState('attempt-1');
+        setCoachingPaused(false);
+      }
       pushLog('system', `Camera started (${cameraFacing}).`);
       const loop = async () => {
         if (!runningRef.current || !poseRef.current || !videoRef.current) return;
@@ -1116,6 +1230,20 @@ export default function App() {
               ))}
             </div>
 
+            <div className="control-row">
+              <button className={workflowMode === 'free' ? 'button button--active' : 'button'} onClick={() => setWorkflowMode('free')}>
+                Free practice
+              </button>
+              <button
+                className={workflowMode === 'coaching' ? 'button button--active' : 'button'}
+                onClick={() => {
+                  resetCoachingTrial();
+                }}
+              >
+                Coaching session
+              </button>
+            </div>
+
             <div className="field-row">
               <label>
                 Athlete name
@@ -1140,8 +1268,8 @@ export default function App() {
             </div>
 
             <div className="action-row">
-              <button className="button button--primary" onClick={startCamera} disabled={!poseReady || !secureContext}>
-                Start camera and sound
+              <button className="button button--primary" onClick={workflowMode === 'coaching' ? startCoachingSession : startFreePractice} disabled={!poseReady || !secureContext}>
+                {workflowMode === 'coaching' ? 'Start coaching session' : 'Start camera and sound'}
               </button>
               <button
                 className={spokenCoachingEnabled ? 'button button--active' : 'button'}
@@ -1162,6 +1290,42 @@ export default function App() {
                 Export CSV
               </button>
             </div>
+
+            {workflowMode === 'coaching' ? (
+              <div className="card coaching-flow-card">
+                <div className="card-head">
+                  <h2>Coaching session</h2>
+                  <span className="pill">{coachingTrialState === 'complete' ? 'done' : coachingTrialState}</span>
+                </div>
+                <p className="muted">Attempt 1 and attempt 2 are exactly 5 push-ups each. Keep the camera live between attempts to coach the form.</p>
+                <div className="score-grid score-grid--compact">
+                  <div>
+                    <span className="muted">Attempt 1</span>
+                    <strong>{coachingAttemptOne.reps}/5</strong>
+                    <span className="muted">{coachingAttemptOne.average || '—'} avg</span>
+                  </div>
+                  <div>
+                    <span className="muted">Attempt 2</span>
+                    <strong>{coachingAttemptTwo.reps}/5</strong>
+                    <span className="muted">{coachingAttemptTwo.average || '—'} avg</span>
+                  </div>
+                  <div>
+                    <span className="muted">Delta</span>
+                    <strong>{coachingAttemptOne.reps && coachingAttemptTwo.reps ? `${coachingDelta >= 0 ? '+' : ''}${coachingDelta}` : '—'}</strong>
+                  </div>
+                </div>
+                <ul className="summary-list">
+                  {coachingSummaryLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                {coachingTrialState === 'between-attempts' ? (
+                  <button className="button button--primary" onClick={continueCoachingAttempt}>
+                    Start attempt 2
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
