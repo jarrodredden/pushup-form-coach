@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",
+    "@supabase/supabase-js": "^2.117.1",
     "google-tts-api": "^2.0.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

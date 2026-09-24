@@ -1,5 +1,33 @@
 create extension if not exists pgcrypto;
 
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  is_first_profile boolean;
+begin
+  select not exists (select 1 from public.profiles) into is_first_profile;
+  insert into public.profiles (id, email, role)
+  values (
+    new.id,
+    new.email,
+    case when is_first_profile then 'admin' else 'standard_user' end
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,

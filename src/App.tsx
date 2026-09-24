@@ -6,6 +6,7 @@ import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
 import { loadHistory, saveHistory } from './lib/storage';
+import { supabase, supabaseEnabled, type AuthSession } from './lib/supabaseClient';
 import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
 import {
   CameraFacing,
@@ -54,6 +55,7 @@ const feedbackOptions: { label: string; value: FeedbackMode }[] = [
 type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
 type WorkflowMode = 'free' | 'coaching';
 type CoachingTrialState = 'idle' | 'attempt-1' | 'between-attempts' | 'attempt-2' | 'complete';
+type UserRole = 'admin' | 'standard_user' | 'local_admin';
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const qualityLabel = (value: number) => {
@@ -190,6 +192,13 @@ export default function App() {
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
   const [adminMode, setAdminMode] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [authRole, setAuthRole] = useState<UserRole>('local_admin');
+  const [authReady, setAuthReady] = useState(!supabaseEnabled);
   const [baselineAngle, setBaselineAngle] = useState<'front' | 'back' | 'side' | 'top'>('front');
   const [baselines, setBaselines] = useState(() => loadBaselines());
   const [history, setHistory] = useState<SessionEntry[]>(() => {
@@ -212,6 +221,7 @@ export default function App() {
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
   const previewMirrored = shouldMirrorPreview(cameraFacing);
+  const canManageBaselines = authRole === 'admin' || authRole === 'local_admin';
   const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
@@ -240,6 +250,38 @@ export default function App() {
   useEffect(() => {
     coachingPausedRef.current = coachingPaused;
   }, [coachingPaused]);
+  useEffect(() => {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+    const client = supabase;
+    let cancelled = false;
+    void client.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      setAuthSession(data.session);
+      void syncProfileRole(data.session).then((role) => {
+        if (!cancelled) {
+          setAuthRole(role);
+        }
+      });
+      setAuthReady(true);
+    });
+    const { data } = client.auth.onAuthStateChange(async (_event, session) => {
+      if (cancelled) return;
+      setAuthSession(session);
+      if (session?.user) {
+        const { data: profile } = await client.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+        setAuthRole((profile?.role as UserRole | undefined) ?? 'standard_user');
+      } else {
+        setAuthRole('local_admin');
+      }
+    });
+    return () => {
+      cancelled = true;
+      data.subscription.unsubscribe();
+    };
+  }, []);
   useEffect(() => {
     saveBaselines(baselines);
   }, [baselines]);
@@ -1058,6 +1100,15 @@ export default function App() {
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
     setBaselineScore(summary.afterScore);
     pushLog('system', 'Session saved locally.');
+    if (supabase && authSession?.user) {
+      void supabase.from('session_results').insert({
+        user_id: authSession.user.id,
+        session_json: {
+          summary,
+          reps: sessionReps,
+        },
+      });
+    }
   };
 
   const deleteHistoryEntry = (id: string) => {
@@ -1073,6 +1124,76 @@ export default function App() {
     localStorage.removeItem(SESSION_STORAGE_KEY);
     localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     pushLog('system', 'Cleared saved sessions.');
+  };
+
+  const syncProfileRole = async (session: AuthSession | null) => {
+    if (!supabase || !session?.user) return 'local_admin' as UserRole;
+    const { data } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+    return (data?.role as UserRole | undefined) ?? 'standard_user';
+  };
+
+  const signIn = async () => {
+    if (!supabase) {
+      setAuthMessage('Supabase env vars are missing. Using local admin mode for the demo.');
+      setAuthRole('local_admin');
+      setAdminMode(true);
+      return;
+    }
+    setAuthLoading(true);
+    setAuthMessage('');
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+    if (error) {
+      setAuthMessage(error.message);
+      setAuthLoading(false);
+      return;
+    }
+    const role = await syncProfileRole(data.session);
+    setAuthRole(role);
+    setAdminMode(role === 'admin');
+    setAuthMessage(`Signed in as ${role}.`);
+    setAuthLoading(false);
+  };
+
+  const signUp = async () => {
+    if (!supabase) {
+      setAuthMessage('Supabase env vars are missing. Use local admin mode for now.');
+      setAuthRole('local_admin');
+      setAdminMode(true);
+      return;
+    }
+    setAuthLoading(true);
+    setAuthMessage('');
+    const { data, error } = await supabase.auth.signUp({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+    if (error) {
+      setAuthMessage(error.message);
+      setAuthLoading(false);
+      return;
+    }
+    const role = await syncProfileRole(data.session ?? null);
+    if (data.session) {
+      setAuthRole(role);
+      setAdminMode(role === 'admin');
+      setAuthMessage(`Account created. Signed in as ${role}.`);
+    } else {
+      setAuthMessage('Account created. Check email if confirmation is enabled.');
+    }
+    setAuthLoading(false);
+  };
+
+  const signOut = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setAuthSession(null);
+    setAuthRole('local_admin');
+    setAdminMode(true);
+    setAuthMessage('Signed out.');
   };
 
   const exportNotes = () => {
@@ -1316,11 +1437,22 @@ export default function App() {
             <div className="card coaching-flow-card">
               <div className="card-head">
                 <h2>Admin baseline</h2>
-                <button className="button" onClick={() => setAdminMode((value) => !value)}>
-                  {adminMode ? 'Admin on' : 'Admin mode'}
+                <span className="pill">{canManageBaselines ? 'admin' : 'standard user'}</span>
+              </div>
+              <p className="muted">Capture a good reference per angle. Baselines are local now and can sync from Supabase later.</p>
+              <div className="action-row">
+                <button
+                  className="button"
+                  onClick={() => {
+                    if (!supabaseEnabled) {
+                      setAdminMode((value) => !value);
+                    }
+                  }}
+                  disabled={supabaseEnabled}
+                >
+                  {adminMode ? 'Local admin on' : 'Local admin mode'}
                 </button>
               </div>
-              <p className="muted">Capture a good reference per angle. The app stores it locally today and can sync to Supabase later.</p>
               <div className="control-row">
                 {(['front', 'back', 'side', 'top'] as const).map((angle) => (
                   <button key={angle} className={baselineAngle === angle ? 'button button--active' : 'button'} onClick={() => setBaselineAngle(angle)}>
@@ -1331,7 +1463,7 @@ export default function App() {
               <div className="action-row">
                 <button
                   className="button button--primary"
-                  disabled={!adminMode || !analysis}
+                  disabled={!canManageBaselines || !analysis}
                   onClick={() => {
                     if (!analysis) return;
                     setBaselines((current) => ({
@@ -1341,6 +1473,15 @@ export default function App() {
                         [baselineAngle]: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
                       },
                     }));
+                    if (supabase && authSession?.user && canManageBaselines) {
+                      void supabase.from('baselines').upsert({
+                        angle: baselineAngle,
+                        label: `${baselineAngle} baseline`,
+                        pose: createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`),
+                        created_by: authSession.user.id,
+                        active: true,
+                      });
+                    }
                     pushLog('system', `Saved ${baselineAngle} baseline locally.`);
                   }}
                 >
@@ -1348,7 +1489,7 @@ export default function App() {
                 </button>
                 <button
                   className="button"
-                  disabled={!adminMode}
+                  disabled={!canManageBaselines}
                   onClick={() => {
                     setBaselines({
                       updatedAt: nowIso(),
@@ -1367,6 +1508,39 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            <div className="card coaching-flow-card">
+              <div className="card-head">
+                <h2>Sign in</h2>
+                <span className="pill">{authReady ? (supabaseEnabled ? 'Supabase on' : 'Local demo') : 'Loading auth'}</span>
+              </div>
+              <p className="muted">
+                Email/password auth unlocks admin baselines and saved results. When Supabase env vars are missing, the app keeps the demo working with local admin mode.
+              </p>
+              <div className="field-row">
+                <label>
+                  Email
+                  <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" />
+                </label>
+                <label>
+                  Password
+                  <input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="••••••••" />
+                </label>
+              </div>
+              <div className="action-row">
+                <button className="button button--primary" disabled={authLoading} onClick={signIn}>
+                  Sign in
+                </button>
+                <button className="button" disabled={authLoading} onClick={signUp}>
+                  Sign up
+                </button>
+                <button className="button" disabled={authLoading && !authSession} onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+              <p className="muted">{authSession ? `Signed in as ${authSession.user.email ?? 'unknown'} (${authRole})` : 'Signed out'}</p>
+              {authMessage ? <p className="metric-copy">{authMessage}</p> : null}
             </div>
 
             {workflowMode === 'coaching' ? (
