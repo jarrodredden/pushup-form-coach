@@ -1,13 +1,43 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { AdminSheet } from './components/AdminSheet';
+import { HistorySheet } from './components/HistorySheet';
+import { CameraIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
+import { BreakPanel, CalibratingPanel, LiveFormPanel, type ChecklistItem } from './components/LivePanels';
+import { ResultsPanel } from './components/ResultsPanel';
+import { SetupPanel } from './components/SetupPanel';
+import { Stepper } from './components/Stepper';
+import {
+  createBaselineReference,
+  createDefaultBaselineReference,
+  gradingAngleForView,
+  loadBaselines,
+  saveBaselines,
+  scoreAgainstBaseline,
+  type BaselineMetricKey,
+} from './lib/baselineStorage';
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
-import { createBaselineReference, loadBaselines, saveBaselines, scoreAgainstBaseline } from './lib/baselineStorage';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
+import {
+  activeStepKey,
+  attemptForTrialState,
+  coachingFocusLines,
+  deriveJourneyPhase,
+  journeySteps,
+  REPS_PER_SET,
+  summarizeReps,
+  trialStateAfterRep,
+  type CalibrationState,
+  type CoachingTrialState,
+  type WorkflowMode,
+} from './lib/sessionFlow';
 import { loadHistory, saveHistory } from './lib/storage';
 import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
-import {
+import type {
+  BaselineAngle,
+  BaselinePoseReference,
   CameraFacing,
   CameraViewMode,
   FeedbackMode,
@@ -25,47 +55,18 @@ const SESSION_STORAGE_KEY = 'pushup-coach-history';
 const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
+const ADMIN_UNLOCK_KEY = 'pushup-admin-pin-unlocked';
+const ADMIN_PIN = '180180';
 const RESULTS_UPLOAD_URL =
   (import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined) ??
   'https://script.google.com/macros/s/AKfycbyE8BrKiLi13COPUOqw9oeQObcUP40lrsRkT3jHyeK_BQsMMUWHc9HjZCcF2y0o0Dqw8g/exec';
 
-const cameraOptions: { label: string; value: CameraFacing }[] = [
-  { label: 'Front camera', value: 'user' },
-  { label: 'Back camera', value: 'environment' },
-];
-
-const viewOptions: { label: string; value: CameraViewMode; helper: string }[] = [
-  {
-    label: 'Head-on',
-    value: 'head-on',
-    helper: 'Default for phone demos. Put the phone low and in front so hands, torso, and head stay visible.',
-  },
-  {
-    label: 'Side',
-    value: 'side',
-    helper: 'Advanced option. Use a tripod or extra room if you want the side-view hip-line cues.',
-  },
-];
-
-const feedbackOptions: { label: string; value: FeedbackMode }[] = [
-  { label: 'Control', value: 'control' },
-  { label: 'Visual', value: 'visual' },
-  { label: 'Audio', value: 'audio' },
-  { label: 'Combined', value: 'combined' },
-];
-
 type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
-type WorkflowMode = 'free' | 'coaching';
-type CoachingTrialState = 'idle' | 'attempt-1' | 'between-attempts' | 'attempt-2' | 'complete';
+type UploadState = 'idle' | 'uploading' | 'done' | 'error';
+type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const qualityLabel = (value: number) => {
-  if (value >= 88) return 'elite';
-  if (value >= 75) return 'solid';
-  if (value >= 60) return 'in progress';
-  return 'needs work';
-};
 const nowIso = () => new Date().toISOString();
+const freshRepState = () => ({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
 
 function speak(message: string) {
   playVoiceMessage(message);
@@ -129,17 +130,26 @@ function playCueTone(context: AudioContext) {
   oscillator.stop(now + 0.18);
 }
 
-function Metric({ label, value }: { label: string; value: number | null }) {
-  const actualValue = value ?? 0;
-  const color = actualValue >= 85 ? 'good' : actualValue >= 70 ? 'mid' : 'bad';
+function ConfidenceRing({ value }: { value: number }) {
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.min(100, Math.max(0, value));
   return (
-    <div className="metric">
-      <div className="metric__head">
-        <span>{label}</span>
-        <strong>{value === null ? '—' : Math.round(value)}</strong>
-      </div>
-      <div className="metric__bar">
-        <span className={color} style={{ width: `${clamp(actualValue, 0, 100)}%` }} />
+    <div className="ring" aria-label={`${clamped}% tracking confidence`}>
+      <svg viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r={radius} className="ring__track" />
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          className="ring__value"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - clamped / 100)}
+        />
+      </svg>
+      <div className="ring__label">
+        <strong>{clamped}%</strong>
+        <span>tracking</span>
       </div>
     </div>
   );
@@ -161,16 +171,17 @@ export default function App() {
   const activeFailureRef = useRef({ text: '', frames: 0, startedAt: 0 });
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
-  const repStateRef = useRef({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
+  const repStateRef = useRef(freshRepState());
   const repCounterRef = useRef(createRepCounter());
+  const attemptRepCountRef = useRef<Record<1 | 2, number>>({ 1: 0, 2: 0 });
+  const frameHandlerRef = useRef<(landmarks: PosePoint[] | undefined) => void>(() => undefined);
   const coachingFocusRef = useRef<{ key: CoachingIssueKey | null; resolvedAt: number | null; cue: string }>({
     key: null,
     resolvedAt: null,
     cue: '',
   });
-  const frameCounterRef = useRef(0);
   const stableCalibrationFramesRef = useRef(0);
-  const calibrationStateRef = useRef<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
+  const calibrationStateRef = useRef<CalibrationState>('idle');
   const cueLastTextRef = useRef('');
   const cueLastEmittedAtRef = useRef(0);
   const repSpeechLockUntilRef = useRef(0);
@@ -185,21 +196,24 @@ export default function App() {
   const [athleteName, setAthleteName] = useState(() => localStorage.getItem(SESSION_NAME_KEY) ?? '');
   const [sessionLogs, setSessionLogs] = useState<LogEntry[]>([]);
   const [sessionReps, setSessionReps] = useState<SessionRep[]>([]);
-  const [reps, setReps] = useState(0);
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
   const [spokenCoachingEnabled, setSpokenCoachingEnabled] = useState(false);
-  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('free');
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('coaching');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
-  const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem('pushup-admin-pin-unlocked') === '1');
-  const [adminPin, setAdminPin] = useState('');
-  const [pinMessage, setPinMessage] = useState('');
+  const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem(ADMIN_UNLOCK_KEY) === '1');
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [uploadMessage, setUploadMessage] = useState('');
-  const [uploadingResult, setUploadingResult] = useState(false);
-  const [baselineAngle, setBaselineAngle] = useState<'front' | 'back' | 'side' | 'top'>('front');
+  const [savedLocally, setSavedLocally] = useState(false);
+  const [baselineAngle, setBaselineAngle] = useState<BaselineAngle>('front');
   const [baselines, setBaselines] = useState(() => loadBaselines());
-  const [baselineDraft, setBaselineDraft] = useState(() => loadBaselines().references.front);
+  const [baselineDraft, setBaselineDraft] = useState<BaselinePoseReference | null>(
+    () => loadBaselines().references.front ?? createDefaultBaselineReference('front'),
+  );
   const [history, setHistory] = useState<SessionEntry[]>(() => {
     const stored = loadHistory(SESSION_STORAGE_KEY);
     if (stored.length) return stored;
@@ -210,28 +224,27 @@ export default function App() {
     }
     return [];
   });
-  const [baselineScore, setBaselineScore] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [audioUnlocked, setAudioUnlocked] = useState(() => localStorage.getItem(SOUND_WANTED_KEY) === '1');
-  const [calibrationState, setCalibrationState] = useState<'idle' | 'checking' | 'ready' | 'countdown' | 'counting'>('idle');
+  const [calibrationState, setCalibrationState] = useState<CalibrationState>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const [showGoOverlay, setShowGoOverlay] = useState(false);
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
+
   const previewMirrored = shouldMirrorPreview(cameraFacing);
-  const canManageBaselines = adminUnlocked;
-  const activeViewHelper = viewOptions.find((option) => option.value === cameraView)?.helper ?? '';
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
+  const gradingAngle = gradingAngleForView(cameraView);
   const feedbackModeRef = useRef(feedbackMode);
   const audioUnlockedRef = useRef(audioUnlocked);
   const spokenCoachingEnabledRef = useRef(spokenCoachingEnabled);
   const workflowModeRef = useRef(workflowMode);
   const coachingTrialStateRef = useRef(coachingTrialState);
   const coachingPausedRef = useRef(coachingPaused);
-  const adminUnlockedRef = useRef(adminUnlocked);
   const repEncouragementTickRef = useRef(0);
+
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
   }, [feedbackMode]);
@@ -251,35 +264,22 @@ export default function App() {
     coachingPausedRef.current = coachingPaused;
   }, [coachingPaused]);
   useEffect(() => {
-    adminUnlockedRef.current = adminUnlocked;
-    localStorage.setItem('pushup-admin-pin-unlocked', adminUnlocked ? '1' : '0');
+    localStorage.setItem(ADMIN_UNLOCK_KEY, adminUnlocked ? '1' : '0');
   }, [adminUnlocked]);
   useEffect(() => {
     saveBaselines(baselines);
   }, [baselines]);
   useEffect(() => {
-    setBaselineDraft(baselines.references[baselineAngle] ?? createBaselineReference(baselineAngle, analysis ?? {
-      viewMode: cameraView,
-      overallScore: 100,
-      elbowAngle: 180,
-      elbowDepthScore: 100,
-      bodyLineScore: 100,
-      elbowFlareScore: 100,
-      handStackScore: 100,
-      headAlignmentScore: 100,
-      framingScore: 100,
-      hipSagScore: null,
-      hipPikeScore: null,
-      confidence: 1,
-      phase: 'unknown',
-      setupHint: null,
-      notes: [],
-    }, `${baselineAngle} baseline`));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setBaselineDraft(baselines.references[baselineAngle] ?? createDefaultBaselineReference(baselineAngle));
   }, [baselineAngle, baselines.references]);
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
   useEffect(() => {
     if (calibrationState !== 'checking') {
       if (checkingTimerRef.current !== null) {
@@ -311,133 +311,149 @@ export default function App() {
     };
   }, [calibrationState]);
 
-  const currentSummary = useMemo(() => {
-    const totalScore = sessionReps.reduce((sum, rep) => sum + rep.score, 0);
-    const bestScore = sessionReps.reduce((best, rep) => Math.max(best, rep.score), 0);
-    const averageScore = sessionReps.length ? Math.round(totalScore / sessionReps.length) : analysis?.overallScore ?? 0;
-    return {
-      averageScore,
-      bestScore,
-      quality: qualityLabel(averageScore),
-    };
-  }, [analysis?.overallScore, sessionReps]);
-
-  const attemptReps = (attempt: 1 | 2) => sessionReps.filter((rep) => rep.attempt === attempt);
-  const attemptSummary = (attempt: 1 | 2) => {
-    const repsForAttempt = attemptReps(attempt);
-    const total = repsForAttempt.reduce((sum, rep) => sum + rep.score, 0);
-    const average = repsForAttempt.length ? Math.round(total / repsForAttempt.length) : 0;
-    return {
-      reps: repsForAttempt.length,
-      average,
-      best: repsForAttempt.reduce((best, rep) => Math.max(best, rep.score), 0),
-    };
+  const setCalibration = (next: CalibrationState) => {
+    calibrationStateRef.current = next;
+    setCalibrationState(next);
   };
-  const coachingAttemptOne = attemptSummary(1);
-  const coachingAttemptTwo = attemptSummary(2);
-  const coachingDelta = coachingAttemptTwo.average - coachingAttemptOne.average;
-  const coachingSummaryLines = useMemo(() => {
-    const latest = sessionReps.filter((rep) => rep.attempt === (coachingTrialState === 'complete' ? 2 : 1));
-    const avgDepth = latest.length ? latest.reduce((sum, rep) => sum + rep.elbowDepthScore, 0) / latest.length : 0;
-    const avgBody = latest.length ? latest.reduce((sum, rep) => sum + rep.bodyLineScore, 0) / latest.length : 0;
-    const avgElbows = latest.length ? latest.reduce((sum, rep) => sum + rep.elbowFlareScore, 0) / latest.length : 0;
-    const summary: string[] = [];
-    if (avgDepth < 68) summary.push('Depth: go a little deeper.');
-    if (avgBody < 74) summary.push('Body line: keep the body straighter.');
-    if (avgElbows < 72) summary.push('Elbows: tuck them in a little more.');
-    if (!summary.length) summary.push('Looks strong — keep the same shape and depth.');
-    return summary;
-  }, [coachingTrialState, sessionReps]);
+
+  const setTrialState = (next: CoachingTrialState) => {
+    coachingTrialStateRef.current = next;
+    setCoachingTrialState(next);
+  };
+
+  const setPaused = (next: boolean) => {
+    coachingPausedRef.current = next;
+    setCoachingPaused(next);
+  };
+
+  const orderedReps = useMemo(() => [...sessionReps].sort((a, b) => a.index - b.index), [sessionReps]);
+  const set1Reps = useMemo(() => orderedReps.filter((rep) => rep.attempt === 1), [orderedReps]);
+  const set2Reps = useMemo(() => orderedReps.filter((rep) => rep.attempt === 2), [orderedReps]);
+  const set1Summary = useMemo(() => summarizeReps(set1Reps), [set1Reps]);
+  const set2Summary = useMemo(() => summarizeReps(set2Reps), [set2Reps]);
+  const overallSummary = useMemo(() => summarizeReps(orderedReps), [orderedReps]);
+  const coachingComplete = set1Summary.count > 0 && set2Summary.count > 0;
+
+  const phase = deriveJourneyPhase({
+    cameraStatus,
+    calibrationState,
+    workflowMode,
+    trialState: coachingTrialState,
+    hasResults: sessionReps.length > 0,
+  });
+  const steps = journeySteps(workflowMode);
+  const stepKey = activeStepKey(phase, workflowMode, coachingTrialState);
+  const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
+
+  const currentAttempt: 0 | 1 | 2 =
+    workflowMode !== 'coaching'
+      ? 0
+      : coachingTrialState === 'attempt-2' || coachingTrialState === 'complete'
+        ? 2
+        : 1;
+  const currentSetReps = workflowMode === 'coaching' ? orderedReps.filter((rep) => rep.attempt === currentAttempt) : orderedReps;
+  const lastRep = currentSetReps.at(-1) ?? null;
+
+  const previousScore = useMemo(() => {
+    const name = athleteName.trim();
+    if (!name) return null;
+    return history.find((entry) => entry.name === name && entry.createdAt !== sessionStartedAt)?.afterScore ?? null;
+  }, [athleteName, history, sessionStartedAt]);
+
+  const focusLines = useMemo(() => {
+    if (workflowMode === 'coaching') return coachingFocusLines(coachingComplete ? set2Summary : set1Summary);
+    return coachingFocusLines(overallSummary);
+  }, [coachingComplete, overallSummary, set1Summary, set2Summary, workflowMode]);
 
   const applyBaselineBias = (frame: PoseAnalysis): PoseAnalysis => {
-    const reference = baselines.references[frame.viewMode === 'side' ? 'side' : baselineAngle];
+    const reference = baselines.references[gradingAngleForView(frame.viewMode)];
     if (!reference) return frame;
-    const score = (actual: number, target: number | null, tolerance = 12) => scoreAgainstBaseline(actual, target, tolerance);
+    const score = (key: BaselineMetricKey, actual: number) => scoreAgainstBaseline(actual, reference.targets[key], reference.tolerances[key]);
+    const elbowDepthScore = score('elbowDepthScore', frame.elbowDepthScore);
+    const bodyLineScore = score('bodyLineScore', frame.bodyLineScore);
+    const elbowFlareScore = score('elbowFlareScore', frame.elbowFlareScore);
+    const handStackScore = score('handStackScore', frame.handStackScore);
+    const headAlignmentScore = score('headAlignmentScore', frame.headAlignmentScore);
+    const framingScore = score('framingScore', frame.framingScore);
     return {
       ...frame,
       overallScore: Math.round(
-        (
-          score(frame.elbowDepthScore, reference.targets.elbowDepthScore, reference.tolerances.elbowDepthScore) * 0.35 +
-          score(frame.bodyLineScore, reference.targets.bodyLineScore, reference.tolerances.bodyLineScore) * 0.3 +
-          score(frame.elbowFlareScore, reference.targets.elbowFlareScore, reference.tolerances.elbowFlareScore) * 0.12 +
-          score(frame.handStackScore, reference.targets.handStackScore, reference.tolerances.handStackScore) * 0.1 +
-          score(frame.headAlignmentScore, reference.targets.headAlignmentScore, reference.tolerances.headAlignmentScore) * 0.08 +
-          score(frame.framingScore, reference.targets.framingScore, reference.tolerances.framingScore) * 0.05
-        ),
+        elbowDepthScore * 0.35 +
+          bodyLineScore * 0.3 +
+          elbowFlareScore * 0.12 +
+          handStackScore * 0.1 +
+          headAlignmentScore * 0.08 +
+          framingScore * 0.05,
       ),
-      elbowDepthScore: score(frame.elbowDepthScore, reference.targets.elbowDepthScore, reference.tolerances.elbowDepthScore),
-      bodyLineScore: score(frame.bodyLineScore, reference.targets.bodyLineScore, reference.tolerances.bodyLineScore),
-      elbowFlareScore: score(frame.elbowFlareScore, reference.targets.elbowFlareScore, reference.tolerances.elbowFlareScore),
-      handStackScore: score(frame.handStackScore, reference.targets.handStackScore, reference.tolerances.handStackScore),
-      headAlignmentScore: score(frame.headAlignmentScore, reference.targets.headAlignmentScore, reference.tolerances.headAlignmentScore),
-      framingScore: score(frame.framingScore, reference.targets.framingScore, reference.tolerances.framingScore),
+      elbowDepthScore,
+      bodyLineScore,
+      elbowFlareScore,
+      handStackScore,
+      headAlignmentScore,
+      framingScore,
+      hipSagScore: frame.hipSagScore === null ? null : score('hipSagScore', frame.hipSagScore),
+      hipPikeScore: frame.hipPikeScore === null ? null : score('hipPikeScore', frame.hipPikeScore),
     };
   };
 
-  const beforeAfter = useMemo(() => {
-    const before = baselineScore ?? history.filter((item) => item.name === athleteName.trim()).at(-1)?.afterScore ?? 0;
-    const after = currentSummary.averageScore;
-    return {
-      before,
-      after,
-      delta: after - before,
-    };
-  }, [athleteName, baselineScore, currentSummary.averageScore, history]);
-
-  const metricDefinitions = cameraView === 'head-on'
+  const liveMetrics = cameraView === 'head-on'
     ? [
       { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
-      { label: 'Body line', value: analysis?.bodyLineScore ?? null },
-      { label: 'Elbow flare', value: analysis?.elbowFlareScore ?? null },
-      { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
-      { label: 'Framing', value: analysis?.framingScore ?? null },
+      { label: 'Plank line', value: analysis?.bodyLineScore ?? null },
+      { label: 'Elbow tuck', value: analysis?.elbowFlareScore ?? null },
+      { label: 'Hands under shoulders', value: analysis?.handStackScore ?? null },
     ]
     : [
       { label: 'Elbow depth', value: analysis?.elbowDepthScore ?? null },
-      { label: 'Body line', value: analysis?.bodyLineScore ?? null },
+      { label: 'Plank line', value: analysis?.bodyLineScore ?? null },
       { label: 'Hip sag', value: analysis?.hipSagScore ?? null },
-      { label: 'Hip pike', value: analysis?.hipPikeScore ?? null },
-      { label: 'Hands stacked', value: analysis?.handStackScore ?? null },
+      { label: 'Hip pike (butt up)', value: analysis?.hipPikeScore ?? null },
     ];
-
-  const calibrationStatusText =
-    calibrationState === 'countdown'
-      ? countdownValue === null
-        ? 'Calibration complete'
-        : `Begin in ${countdownValue}`
-      : calibrationState === 'ready'
-        ? 'Ready'
-        : calibrationState === 'counting'
-          ? 'Counting'
-          : 'Calibrating...';
 
   const neutralCoachText = modeAllowsAudio
     ? audioUnlocked
       ? 'Keep the phone steady.'
       : 'Tap Start camera and sound once to unlock cues on iPhone Safari.'
     : 'Control mode shows the camera and calibration gate only.';
-  const calibrationHintCopy = 'You do not need 100% — Ready around 80% with a full body in frame.';
-  const calibrationChecklist = analysis
+
+  const calibrationChecklist: ChecklistItem[] = analysis
     ? cameraView === 'head-on'
       ? [
-          { label: 'Confidence (required)', ok: analysis.confidence >= 0.72, detail: `${Math.round(analysis.confidence * 100)}%` },
-          { label: 'Hands + torso in frame (required)', ok: analysis.framingScore >= 64, detail: `${analysis.framingScore}%` },
-          { label: 'Hands under shoulders (coach)', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
-          { label: 'Head centered (coach)', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%` },
+          { label: 'Body tracked', ok: analysis.confidence >= 0.72, detail: `${Math.round(analysis.confidence * 100)}%`, required: true },
+          { label: 'Hands + torso in frame', ok: analysis.framingScore >= 64, detail: `${analysis.framingScore}%`, required: true },
+          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%`, required: false },
+          { label: 'Head centered', ok: analysis.headAlignmentScore >= 50, detail: `${analysis.headAlignmentScore}%`, required: false },
         ]
       : [
-          { label: 'Confidence (required)', ok: analysis.confidence >= 0.7, detail: `${Math.round(analysis.confidence * 100)}%` },
-          { label: 'Full body in frame (required)', ok: analysis.framingScore >= 62, detail: `${analysis.framingScore}%` },
-          { label: 'Hip line visible (coach)', ok: analysis.hipSagScore !== null && analysis.hipPikeScore !== null, detail: 'side-view' },
-          { label: 'Hands under shoulders (coach)', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%` },
+          { label: 'Body tracked', ok: analysis.confidence >= 0.7, detail: `${Math.round(analysis.confidence * 100)}%`, required: true },
+          { label: 'Full body in frame', ok: analysis.framingScore >= 62, detail: `${analysis.framingScore}%`, required: true },
+          { label: 'Hip line visible', ok: analysis.hipSagScore !== null && analysis.hipPikeScore !== null, detail: 'side', required: false },
+          { label: 'Hands under shoulders', ok: analysis.handStackScore >= 50, detail: `${analysis.handStackScore}%`, required: false },
         ]
     : [];
+
+  const placementTip = cameraView === 'head-on'
+    ? 'Phone low on the floor about 1.5 m in front of you. Hands, shoulders, and head should all be on screen.'
+    : 'Phone at hip height about 2 m to your side, so shoulders, hips, and ankles fit.';
 
   useEffect(() => {
     if (!modeAllowsVisuals) {
       setCurrentCue(neutralCoachText);
     }
   }, [audioUnlocked, calibrationState, modeAllowsVisuals, neutralCoachText]);
+
+  const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
+    setSessionLogs((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        at: Date.now(),
+        kind,
+        message,
+        details,
+      },
+      ...current,
+    ].slice(0, 60));
+  };
 
   const clearCalibrationTimers = () => {
     if (countdownTimerRef.current !== null) {
@@ -463,21 +479,23 @@ export default function App() {
     stableCalibrationFramesRef.current = 0;
     checkingStartedAtRef.current = null;
     setCheckingElapsedMs(0);
-    setCalibrationState('checking');
+    setCalibration('checking');
     setCalibrationConfidence(0);
     setCountdownValue(null);
   };
 
-  const beginCountdown = () => {
-    if (calibrationState === 'counting' || countdownTimerRef.current !== null) return;
+  const beginCountdown = (options: { announce?: boolean } = {}) => {
+    const announce = options.announce ?? true;
+    if (countdownTimerRef.current !== null) return;
+    if (announce && calibrationStateRef.current === 'counting') return;
     clearCalibrationTimers();
-    setCalibrationState('countdown');
+    setCalibration('countdown');
     setCountdownValue(null);
-    setCurrentCue('Calibration complete');
+    setCurrentCue(announce ? 'Calibration complete' : 'Get ready');
     let countdown = 5;
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current;
-    if (canSpeakCountdown) {
+    if (canSpeakCountdown && announce) {
       speak('Calibration complete');
     }
 
@@ -503,68 +521,42 @@ export default function App() {
 
         clearCalibrationTimers();
         setCountdownValue(null);
-        setCalibrationState('counting');
+        setCalibration('counting');
         setShowGoOverlay(true);
-        repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
+        repStateRef.current = freshRepState();
         repAccumulatorRef.current = createEmptyRepAccumulator();
-        pushLog('info', 'Calibration complete. Counting started.');
-        setCurrentCue('go');
-        if (goOverlayTimerRef.current !== null) {
-          window.clearTimeout(goOverlayTimerRef.current);
-        }
+        pushLog('info', 'Countdown finished. Counting started.');
+        setCurrentCue('Go!');
         goOverlayTimerRef.current = window.setTimeout(() => {
           setShowGoOverlay(false);
           goOverlayTimerRef.current = null;
-        }, 900);
+        }, 1100);
         if (audioContextRef.current) {
           playCueTone(audioContextRef.current);
         }
       }, 1000);
     };
 
-    countdownTimerRef.current = window.setTimeout(startCountdown, 800);
+    countdownTimerRef.current = window.setTimeout(startCountdown, announce ? 800 : 300);
   };
 
-  const resetCoachingTrial = () => {
-    setWorkflowMode('coaching');
-    setCoachingTrialState('attempt-1');
-    setCoachingPaused(false);
+  const clearSessionData = () => {
     setSessionReps([]);
     setSessionLogs([]);
-    setReps(0);
     setAnalysis(null);
+    setCurrentCue('');
     setSessionStartedAt(null);
+    setShowGoOverlay(false);
+    setActiveBanner(null);
+    setUploadState('idle');
+    setUploadMessage('');
+    setSavedLocally(false);
     repCounterRef.current.reset();
+    attemptRepCountRef.current = { 1: 0, 2: 0 };
     repEncouragementTickRef.current = 0;
     repAccumulatorRef.current = createEmptyRepAccumulator();
-    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
-    frameCounterRef.current = 0;
-  };
-
-  const startFreePractice = async () => {
-    setWorkflowMode('free');
-    setCoachingTrialState('idle');
-    setCoachingPaused(false);
-    await startCamera();
-  };
-
-  const startCoachingSession = async () => {
-    if (!athleteName.trim()) {
-      setPinMessage('Enter a volunteer name before starting a coaching session.');
-      return;
-    }
-    resetCoachingTrial();
-    await startCamera();
-  };
-
-  const continueCoachingAttempt = () => {
-    setCoachingPaused(false);
-    setCoachingTrialState((current) => (current === 'between-attempts' ? 'attempt-2' : current));
-    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
-    repAccumulatorRef.current = createEmptyRepAccumulator();
-    repCounterRef.current.reset();
-    setCurrentCue('Try attempt 2.');
-    pushLog('system', 'Attempt 2 started.');
+    repStateRef.current = freshRepState();
+    coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
   };
 
   const unlockSound = async () => {
@@ -605,7 +597,7 @@ export default function App() {
     localStorage.setItem(SOUND_WANTED_KEY, '1');
     const unlocked = await unlockAudioContext(audioContextRef);
     if (unlocked && modeAllowsAudio) {
-      pushLog('info', 'Sound unlocked for iPhone Safari.');
+      pushLog('info', 'Sound unlocked.');
       if (audioContextRef.current) {
         playCueTone(audioContextRef.current);
       }
@@ -622,27 +614,32 @@ export default function App() {
   const getRequiredFailureText = (frame: PoseAnalysis) => {
     const hint = frame.setupHint?.toLowerCase() ?? '';
     if (!hint) return null;
-    if (hint.includes('hands') && hint.includes('torso')) return 'MOVE BACK: Hands and torso not visible';
-    if (hint.includes('hands')) return 'MOVE BACK: Hands not visible';
-    if (hint.includes('torso')) return 'MOVE BACK: Torso not visible';
-    if (hint.includes('shoulders')) return 'MOVE BACK: Shoulders not visible';
-    if (hint.includes('full side profile')) return 'MOVE BACK: Full body not visible';
-    if (frame.confidence < 0.65) return 'HOLD STILL: Need a clearer body';
+    if (hint.includes('hands') && hint.includes('torso')) return 'Move back — hands and torso not visible';
+    if (hint.includes('hands')) return 'Move back — hands not visible';
+    if (hint.includes('torso')) return 'Move back — torso not visible';
+    if (hint.includes('shoulders')) return 'Move back — shoulders not visible';
+    if (hint.includes('full side profile')) return 'Move back — full body not visible';
+    if (frame.confidence < 0.65) return 'Hold still — need a clearer view';
     return null;
   };
 
-  const buildSessionSummary = () => ({
-    id: `${Date.now()}`,
-    name: athleteName.trim() || 'Anonymous',
-    dateIso: sessionStartedAt ?? nowIso(),
-    reps,
-    averageScore: currentSummary.averageScore,
-    bestScore: currentSummary.bestScore,
-    beforeScore: beforeAfter.before,
-    afterScore: beforeAfter.after,
-    spokenCoachingEnabled,
-    notes: [...new Set([...sessionReps.flatMap((rep) => rep.notes), ...(analysis?.notes ?? [])])].slice(0, 8),
-  });
+  const buildSessionSummary = () => {
+    const coachingScores = workflowMode === 'coaching' && coachingComplete;
+    const beforeScore = coachingScores ? set1Summary.average : previousScore ?? 0;
+    const afterScore = coachingScores ? set2Summary.average : overallSummary.average;
+    return {
+      id: `${Date.now()}`,
+      name: athleteName.trim() || 'Anonymous',
+      dateIso: sessionStartedAt ?? nowIso(),
+      reps: overallSummary.count,
+      averageScore: overallSummary.average,
+      bestScore: overallSummary.best,
+      beforeScore,
+      afterScore,
+      spokenCoachingEnabled,
+      notes: [...new Set([...focusLines, ...sessionReps.flatMap((rep) => rep.notes)])].slice(0, 8),
+    };
+  };
 
   const buildSessionEntry = (): SessionEntry => {
     const summary = buildSessionSummary();
@@ -692,6 +689,30 @@ export default function App() {
     return issues;
   };
 
+  const renderAnalysisCue = (cue: string) => {
+    const shortCue = shortenCue(cue);
+    const now = Date.now();
+    const isNewCue = shortCue !== cueLastTextRef.current;
+    const cooldownExpired = now - cueLastEmittedAtRef.current >= 5000;
+    if (!isNewCue && !cooldownExpired) return;
+
+    cueLastTextRef.current = shortCue;
+    cueLastEmittedAtRef.current = now;
+    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+
+    if (currentModeAllowsVisuals) {
+      setCurrentCue(shortCue);
+    }
+
+    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current || Date.now() < repSpeechLockUntilRef.current) {
+      return;
+    }
+
+    pushLog('cue', shortCue);
+    speak(shortCue);
+  };
+
   const updateCoachingFocus = (frame: PoseAnalysis) => {
     const now = Date.now();
     const issues = buildCoachingIssues(frame);
@@ -731,130 +752,22 @@ export default function App() {
 
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
     if (modeAllowsVisuals) {
-      setCurrentCue('Good rep.');
+      setCurrentCue('Looking good!');
     }
-  };
-
-  const pushLog = (kind: LogEntry['kind'], message: string, details?: string) => {
-    setSessionLogs((current) => [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        at: Date.now(),
-        kind,
-        message,
-        details,
-      },
-      ...current,
-    ].slice(0, 60));
-  };
-
-  const renderAnalysisCue = (cue: string) => {
-    const shortCue = shortenCue(cue);
-    const now = Date.now();
-    const isNewCue = shortCue !== cueLastTextRef.current;
-    const cooldownExpired = now - cueLastEmittedAtRef.current >= 5000;
-    if (!isNewCue && !cooldownExpired) return;
-
-    cueLastTextRef.current = shortCue;
-    cueLastEmittedAtRef.current = now;
-    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
-    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-
-    if (currentModeAllowsVisuals) {
-      setCurrentCue(shortCue);
-    }
-
-    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current || Date.now() < repSpeechLockUntilRef.current) {
-      return;
-    }
-
-    pushLog('cue', shortCue);
-    speak(shortCue);
-  };
-
-  const processAnalysis = (frame: PoseAnalysis) => {
-    setAnalysis(frame);
-    const smoothConfidence = confidenceSmoothRef.current
-      ? confidenceSmoothRef.current * 0.85 + frame.confidence * 0.15
-      : frame.confidence;
-    confidenceSmoothRef.current = smoothConfidence;
-    setCalibrationConfidence(Math.round(smoothConfidence * 100));
-
-    const isCounting = calibrationStateRef.current === 'counting';
-    const lostTrackingText = 'MOVE BACK: Body lost';
-    const lostTracking = frame.confidence < 0.32 || frame.framingScore < 20;
-    const failureText = isCounting ? (lostTracking ? lostTrackingText : null) : getRequiredFailureText(frame);
-    if (failureText) {
-      if (activeFailureRef.current.text === failureText) {
-        activeFailureRef.current.frames += 1;
-      } else {
-        activeFailureRef.current = { text: failureText, frames: 1, startedAt: Date.now() };
-      }
-      const persistMs = Date.now() - activeFailureRef.current.startedAt;
-      if (activeFailureRef.current.frames >= 30 || persistMs >= 1000) {
-        setActiveBanner(failureText);
-        renderAnalysisCue(failureText);
-      }
-    } else {
-      activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
-      setActiveBanner(null);
-    }
-
-    if (frame.confidence < MIN_SIGNAL) {
-      setCurrentCue(frame.setupHint ?? 'Move the full body into frame.');
-      return;
-    }
-
-    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
-    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-
-    if (calibrationStateRef.current !== 'counting') {
-      if (isCalibrationReady(frame)) {
-        stableCalibrationFramesRef.current += 1;
-        if (stableCalibrationFramesRef.current >= 3 && calibrationStateRef.current === 'checking') {
-          setCalibrationState('ready');
-          setCurrentCue('Ready');
-        }
-      } else {
-        stableCalibrationFramesRef.current = 0;
-        if (calibrationStateRef.current !== 'countdown') {
-          setCalibrationState('checking');
-          setCountdownValue(null);
-          setCurrentCue(frame.setupHint ?? 'Calibrating camera view...');
-        }
-      }
-      return;
-    }
-
-    if (workflowModeRef.current === 'coaching' && coachingPausedRef.current) {
-      if (feedbackModeRef.current !== 'control') {
-        updateCoachingFocus(frame);
-      }
-      return;
-    }
-
-    if (feedbackModeRef.current !== 'control') {
-      updateCoachingFocus(frame);
-    }
-    if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
-      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Start camera and sound for audio cues.');
-    } else if (!currentModeAllowsVisuals) {
-      setCurrentCue('Control mode: camera only.');
-    }
-    updateRepState(frame);
   };
 
   const finishRep = (analysisFrame: PoseAnalysis) => {
     const nextRepIndex = repCounterRef.current.next();
     const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, nextRepIndex);
+    repAccumulatorRef.current = createEmptyRepAccumulator();
     if (!rep) return;
-    const nextAttempt = coachingTrialStateRef.current === 'attempt-2' ? 2 : coachingTrialStateRef.current === 'between-attempts' ? 2 : coachingTrialStateRef.current === 'idle' ? 0 : 1;
-    if (nextAttempt) {
-      rep.attempt = nextAttempt;
+    const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
+    if (attempt) {
+      rep.attempt = attempt;
+      attemptRepCountRef.current[attempt] += 1;
     }
-    setReps(nextRepIndex);
     setSessionReps((current) => [rep, ...current].slice(0, 50));
-    pushLog('rep', `Rep ${rep.index} scored ${rep.score}/100`, rep.notes.join(' • '));
+    pushLog('rep', `Rep ${rep.index}${attempt ? ` (set ${attempt})` : ''} scored ${rep.score}/100`, rep.notes.join(' • '));
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     if (currentModeAllowsAudio && audioUnlockedRef.current) {
       repSpeechLockUntilRef.current = Date.now() + 900;
@@ -865,27 +778,23 @@ export default function App() {
         repEncouragementTickRef.current += 1;
         speak(phrase);
       } else {
-        speak(`Rep ${nextRepIndex}`);
+        speak(`Rep ${attempt ? attemptRepCountRef.current[attempt] : nextRepIndex}`);
       }
     }
-    if (workflowModeRef.current === 'coaching') {
-      const attemptNumber = rep.attempt ?? 1;
-      const attemptCount = sessionReps.filter((item) => item.attempt === attemptNumber).length + 1;
-      if (attemptNumber === 1 && attemptCount >= 5) {
-        setCoachingPaused(true);
-        setCoachingTrialState('between-attempts');
-        pushLog('system', 'Attempt 1 complete. Review coaching feedback before attempt 2.');
-        setCurrentCue('Review the coaching feedback, then start attempt 2.');
-        return;
-      }
-      if (attemptNumber === 2 && attemptCount >= 5) {
-        setCoachingPaused(true);
-        setCoachingTrialState('complete');
-        pushLog('system', 'Attempt 2 complete. Compare the results.');
-        setCurrentCue('Compare the two attempts.');
-      }
+
+    if (!attempt) return;
+    const nextTrialState = trialStateAfterRep(coachingTrialStateRef.current, attemptRepCountRef.current[attempt]);
+    if (nextTrialState === coachingTrialStateRef.current) return;
+    setTrialState(nextTrialState);
+    setPaused(true);
+    coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    if (nextTrialState === 'between-attempts') {
+      pushLog('system', 'Set 1 complete. Coaching break.');
+      setCurrentCue('Set 1 done! Adjust your form, then start set 2.');
+    } else {
+      pushLog('system', 'Set 2 complete.');
+      setCurrentCue('Session complete!');
     }
-    repAccumulatorRef.current = createEmptyRepAccumulator();
   };
 
   const updateRepState = (frame: PoseAnalysis) => {
@@ -953,6 +862,78 @@ export default function App() {
     }
   };
 
+  const processAnalysis = (frame: PoseAnalysis) => {
+    setAnalysis(frame);
+    const smoothConfidence = confidenceSmoothRef.current
+      ? confidenceSmoothRef.current * 0.85 + frame.confidence * 0.15
+      : frame.confidence;
+    confidenceSmoothRef.current = smoothConfidence;
+    setCalibrationConfidence(Math.round(smoothConfidence * 100));
+
+    const isCounting = calibrationStateRef.current === 'counting';
+    const lostTrackingText = 'Move back — body lost';
+    const lostTracking = frame.confidence < 0.32 || frame.framingScore < 20;
+    const failureText = isCounting ? (lostTracking ? lostTrackingText : null) : getRequiredFailureText(frame);
+    if (failureText) {
+      if (activeFailureRef.current.text === failureText) {
+        activeFailureRef.current.frames += 1;
+      } else {
+        activeFailureRef.current = { text: failureText, frames: 1, startedAt: Date.now() };
+      }
+      const persistMs = Date.now() - activeFailureRef.current.startedAt;
+      if (activeFailureRef.current.frames >= 30 || persistMs >= 1000) {
+        setActiveBanner(failureText);
+        renderAnalysisCue(failureText);
+      }
+    } else {
+      activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
+      setActiveBanner(null);
+    }
+
+    if (frame.confidence < MIN_SIGNAL) {
+      setCurrentCue(frame.setupHint ?? 'Move your whole body into frame.');
+      return;
+    }
+
+    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
+    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
+
+    if (calibrationStateRef.current !== 'counting') {
+      if (isCalibrationReady(frame)) {
+        stableCalibrationFramesRef.current += 1;
+        if (stableCalibrationFramesRef.current >= 3 && calibrationStateRef.current === 'checking') {
+          setCalibration('ready');
+          setCurrentCue('Ready');
+        }
+      } else {
+        stableCalibrationFramesRef.current = 0;
+        if (calibrationStateRef.current !== 'countdown') {
+          setCalibration('checking');
+          setCountdownValue(null);
+          setCurrentCue(frame.setupHint ?? 'Finding you…');
+        }
+      }
+      return;
+    }
+
+    if (workflowModeRef.current === 'coaching' && coachingPausedRef.current) {
+      if (feedbackModeRef.current !== 'control') {
+        updateCoachingFocus(frame);
+      }
+      return;
+    }
+
+    if (feedbackModeRef.current !== 'control') {
+      updateCoachingFocus(frame);
+    }
+    if (!currentModeAllowsVisuals && currentModeAllowsAudio) {
+      setCurrentCue(audioUnlockedRef.current ? 'Audio cues active.' : 'Tap Start camera and sound for audio cues.');
+    } else if (!currentModeAllowsVisuals) {
+      setCurrentCue('Control mode: camera only.');
+    }
+    updateRepState(frame);
+  };
+
   const drawSkeleton = (landmarks: PosePoint[] | null | undefined) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -971,9 +952,9 @@ export default function App() {
     // Keep scoring on raw camera coordinates; the preview mirror is applied to both layers together.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!landmarks?.length) return;
-    ctx.lineWidth = Math.max(2, canvas.width / 240);
-    ctx.strokeStyle = 'rgba(123, 245, 255, 0.78)';
-    ctx.fillStyle = '#8ffaff';
+    ctx.lineWidth = Math.max(3, canvas.width / 200);
+    ctx.strokeStyle = 'rgba(190, 255, 92, 0.85)';
+    ctx.fillStyle = '#f4ffe0';
 
     const joints: Array<[number, number]> = [
       [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28], [11, 24], [12, 23],
@@ -993,11 +974,41 @@ export default function App() {
     for (const point of landmarks) {
       if ((point.visibility ?? 0) < 0.3) continue;
       ctx.beginPath();
-      ctx.arc(point.x * canvas.width, point.y * canvas.height, Math.max(2.4, canvas.width / 220), 0, Math.PI * 2);
+      ctx.arc(point.x * canvas.width, point.y * canvas.height, Math.max(3, canvas.width / 200), 0, Math.PI * 2);
       ctx.fill();
     }
   };
 
+  useEffect(() => {
+    frameHandlerRef.current = (landmarks) => {
+      drawSkeleton(modeAllowsVisuals ? landmarks : null);
+      processAnalysis(applyBaselineBias(analyzePose(landmarks, cameraView)));
+    };
+  });
+
+  const stopCamera = () => {
+    runningRef.current = false;
+    clearCalibrationTimers();
+    setCalibration('idle');
+    setCountdownValue(null);
+    setCalibrationConfidence(0);
+    setActiveBanner(null);
+    stableCalibrationFramesRef.current = 0;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+    setShowGoOverlay(false);
+  };
+
+  // Must stay synchronous up to unlockSound() so iOS treats the Ready clip as part of the tap gesture.
   const startCamera = async () => {
     if (!poseRef.current || !videoRef.current) {
       setCameraError('Pose model is not ready yet.');
@@ -1023,21 +1034,14 @@ export default function App() {
       await video.play();
       runningRef.current = true;
       setCameraStatus('live');
-            setSessionStartedAt((current) => current ?? nowIso());
-      if (workflowModeRef.current === 'coaching') {
-        setCoachingTrialState('attempt-1');
-        setCoachingPaused(false);
-      }
+      setSessionStartedAt((current) => current ?? nowIso());
       pushLog('system', `Camera started (${cameraFacing}).`);
-      const loop = async () => {
+      const loop = () => {
         if (!runningRef.current || !poseRef.current || !videoRef.current) return;
         const videoEl = videoRef.current;
         if (videoEl.readyState >= 2) {
           const result = poseRef.current.detectForVideo(videoEl, performance.now());
-          const landmarks = result.landmarks[0] as PosePoint[] | undefined;
-          drawSkeleton(modeAllowsVisuals ? landmarks : null);
-          const frame = applyBaselineBias(analyzePose(landmarks, cameraView));
-          processAnalysis(frame);
+          frameHandlerRef.current(result.landmarks[0] as PosePoint[] | undefined);
         }
         rafRef.current = requestAnimationFrame(loop);
       };
@@ -1045,119 +1049,122 @@ export default function App() {
     } catch (error) {
       console.error(error);
       setCameraStatus('error');
-      setCameraError('Camera access failed. Grant permission and try again.');
+      setCameraError('Camera access was blocked. Allow camera access in the browser and try again.');
       pushLog('system', 'Camera access failed.');
       stopCamera();
     }
   };
 
-  const stopCamera = () => {
-    runningRef.current = false;
-    clearCalibrationTimers();
-    setCalibrationState('idle');
-    setCountdownValue(null);
-    setCalibrationConfidence(0);
-    stableCalibrationFramesRef.current = 0;
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+  const startSession = () => {
+    if (workflowMode === 'coaching') {
+      if (!athleteName.trim()) return;
+      clearSessionData();
+      setTrialState('attempt-1');
+      setPaused(false);
+    } else {
+      clearSessionData();
+      setTrialState('idle');
+      setPaused(false);
     }
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
-    if (cameraStatus === 'live') setCameraStatus('idle');
-    setShowGoOverlay(false);
+    void startCamera();
+  };
+
+  const startSetTwo = () => {
+    attemptRepCountRef.current[2] = 0;
+    repStateRef.current = freshRepState();
+    repAccumulatorRef.current = createEmptyRepAccumulator();
+    coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    setTrialState('attempt-2');
+    setPaused(false);
+    pushLog('system', 'Set 2 started.');
+    beginCountdown({ announce: false });
   };
 
   const stopSession = () => {
     stopCamera();
-    runningRef.current = false;
     setCameraStatus('idle');
     pushLog('system', 'Session stopped.');
   };
 
-  const resetSet = () => {
+  const resetForRetry = () => {
     stopCamera();
-    setSessionReps([]);
-    setSessionLogs([]);
-    setReps(0);
-    setAnalysis(null);
-    setCurrentCue('');
-    setSessionStartedAt(null);
-    setShowGoOverlay(false);
-    setCurrentCue('');
-    repCounterRef.current.reset();
-    repEncouragementTickRef.current = 0;
-    repAccumulatorRef.current = createEmptyRepAccumulator();
-    repStateRef.current = { sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 };
-    frameCounterRef.current = 0;
-    pushLog('system', 'Set reset.');
+    setCameraStatus('idle');
+    clearSessionData();
+    setTrialState('idle');
+    setPaused(false);
   };
 
+  const nextVolunteer = () => {
+    resetForRetry();
+    setAthleteName('');
+  };
+
+  useEffect(() => {
+    if (coachingTrialState !== 'complete' || !runningRef.current) return;
+    const timer = window.setTimeout(() => {
+      stopCamera();
+      setCameraStatus('idle');
+    }, 900);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coachingTrialState]);
+
   const saveCurrentSession = () => {
-    if (!sessionReps.length && !analysis) return;
+    if (!sessionReps.length) return;
     if (!athleteName.trim()) {
-      setUploadMessage('Enter a volunteer name before saving a result.');
+      setToast({ tone: 'error', text: 'Add a name before saving.' });
       return;
     }
-    const summary: SessionEntry = buildSessionEntry();
-    const nextHistory = [summary, ...history].slice(0, 25);
+    const entry = buildSessionEntry();
+    const nextHistory = [entry, ...history].slice(0, 25);
     setHistory(nextHistory);
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
-    setBaselineScore(summary.afterScore);
+    setSavedLocally(true);
+    setToast({ tone: 'success', text: 'Saved to this device.' });
     pushLog('system', 'Session saved locally.');
   };
 
   const buildUploadRow = () => {
     const mode = workflowMode === 'coaching' ? 'coaching_session' : 'free_practice';
-    const attemptOne = attemptSummary(1);
-    const attemptTwo = attemptSummary(2);
-    const notesSummary = [...new Set([...(sessionReps.flatMap((rep) => rep.notes)), ...(analysis?.notes ?? [])])].slice(0, 6).join('; ');
+    const notesSummary = [...new Set([...focusLines, ...sessionReps.flatMap((rep) => rep.notes)])].slice(0, 6).join('; ');
     return {
       timestamp: nowIso(),
       volunteer_name: athleteName.trim() || 'Anonymous',
       mode,
-      attempt1_score: mode === 'coaching_session' ? attemptOne.average || '' : currentSummary.averageScore,
-      attempt2_score: mode === 'coaching_session' ? attemptTwo.average || '' : '',
-      delta: mode === 'coaching_session' ? coachingDelta : '',
-      reps: sessionReps.length || reps,
+      attempt1_score: mode === 'coaching_session' ? set1Summary.average || '' : overallSummary.average,
+      attempt2_score: mode === 'coaching_session' ? set2Summary.average || '' : '',
+      delta: mode === 'coaching_session' && coachingComplete ? set2Summary.average - set1Summary.average : '',
+      reps: overallSummary.count,
       notes_summary: notesSummary,
       device_user_agent: navigator.userAgent.slice(0, 120),
     };
   };
 
   const uploadResult = async () => {
-    if (!RESULTS_UPLOAD_URL) {
-      setUploadMessage('Upload unavailable until VITE_RESULTS_UPLOAD_URL is configured.');
-      return;
-    }
     if (!athleteName.trim()) {
-      setUploadMessage('Enter a volunteer name before uploading.');
+      setToast({ tone: 'error', text: 'Add a name before uploading.' });
       return;
     }
-    setUploadingResult(true);
-    setUploadMessage('');
+    setUploadState('uploading');
+    setUploadMessage('Uploading to the results sheet…');
     try {
-      const payload = buildUploadRow();
       const response = await fetch(RESULTS_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildUploadRow()),
       });
       if (!response.ok) {
         throw new Error(`Upload failed (${response.status})`);
       }
-      setUploadMessage('Result uploaded to the shared sheet.');
+      setUploadState('done');
+      setUploadMessage('Uploaded to the shared results sheet.');
+      setToast({ tone: 'success', text: 'Result uploaded to the sheet.' });
       pushLog('system', 'Result uploaded to Google Sheet.');
     } catch (error) {
       console.error(error);
-      setUploadMessage('Upload failed. Try again after checking the webhook URL.');
-    } finally {
-      setUploadingResult(false);
+      setUploadState('error');
+      setUploadMessage('Upload failed — check the connection and try again. Export notes still works offline.');
+      setToast({ tone: 'error', text: 'Upload failed. Try again.' });
     }
   };
 
@@ -1165,55 +1172,83 @@ export default function App() {
     const nextHistory = history.filter((entry) => entry.id !== id);
     setHistory(nextHistory);
     saveHistory(SESSION_STORAGE_KEY, nextHistory);
-    pushLog('system', 'Deleted a saved session.');
   };
 
   const clearHistory = () => {
-    if (!history.length) return;
     setHistory([]);
     localStorage.removeItem(SESSION_STORAGE_KEY);
     localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-    pushLog('system', 'Cleared saved sessions.');
   };
 
-  const unlockAdminPin = () => {
-    if (adminPin.trim() === '180180') {
-      setAdminUnlocked(true);
-      setPinMessage('Admin controls unlocked on this device.');
-      setAdminPin('');
-      pushLog('system', 'Admin PIN accepted.');
-      return;
+  const unlockAdmin = (pin: string) => {
+    if (pin.trim() !== ADMIN_PIN) {
+      pushLog('system', 'Admin PIN rejected.');
+      return false;
     }
-    setPinMessage('Wrong PIN. Try again.');
-    pushLog('system', 'Admin PIN rejected.');
+    setAdminUnlocked(true);
+    setToast({ tone: 'success', text: 'Admin unlocked on this device.' });
+    pushLog('system', 'Admin PIN accepted.');
+    return true;
   };
 
-  const lockAdminPin = () => {
+  const lockAdmin = () => {
     setAdminUnlocked(false);
-    setPinMessage('Admin controls locked.');
-    localStorage.removeItem('pushup-admin-pin-unlocked');
+    localStorage.removeItem(ADMIN_UNLOCK_KEY);
+    setAdminOpen(false);
+    setToast({ tone: 'info', text: 'Signed out of admin.' });
+  };
+
+  const updateDraft = (key: BaselineMetricKey, field: 'targets' | 'tolerances', value: number | null) => {
+    setBaselineDraft((current) => {
+      if (!current) return current;
+      if (field === 'tolerances') {
+        return { ...current, tolerances: { ...current.tolerances, [key]: value ?? 0 } };
+      }
+      return { ...current, targets: { ...current.targets, [key]: value } as BaselinePoseReference['targets'] };
+    });
+  };
+
+  const seedDraftFromPose = () => {
+    if (!analysis) return;
+    const seeded = createBaselineReference(baselineAngle, analysis, `${baselineAngle} 100 standard`);
+    setBaselineDraft((current) => (current ? { ...seeded, tolerances: current.tolerances } : seeded));
+    setToast({ tone: 'info', text: 'Draft filled from the live pose. Review, then save.' });
+  };
+
+  const saveStandard = () => {
+    if (!baselineDraft) return;
+    const reference = { ...baselineDraft, angle: baselineAngle, createdAt: nowIso() };
+    setBaselines((current) => ({
+      updatedAt: nowIso(),
+      references: { ...current.references, [baselineAngle]: reference },
+    }));
+    setToast({ tone: 'success', text: `${baselineAngle[0].toUpperCase()}${baselineAngle.slice(1)} 100 standard saved.` });
+    pushLog('system', `Saved ${baselineAngle} 100 standard.`);
+  };
+
+  const clearStandards = () => {
+    setBaselines({ updatedAt: nowIso(), references: { front: null, back: null, side: null, top: null } });
+    setToast({ tone: 'info', text: 'All 100 standards cleared.' });
   };
 
   const exportNotes = () => {
-    if (!sessionReps.length && !analysis) return;
+    if (!sessionReps.length) return;
     const summary = buildSessionSummary();
     downloadTextFile(
       `pushup-session-${summary.id}-notes.md`,
-      buildNotesExport({
-        ...summary,
-        mode: feedbackMode,
-        cameraView,
-        spokenCoachingEnabled,
-      }, sessionReps),
+      buildNotesExport({ ...summary, mode: feedbackMode, cameraView, spokenCoachingEnabled }, orderedReps),
       'text/markdown',
     );
   };
 
   const exportCsv = () => {
-    if (!sessionReps.length && !analysis) return;
+    if (!sessionReps.length) return;
     const summary: SessionSummary = buildSessionSummary();
-    downloadTextFile(`pushup-session-${summary.id}.csv`, buildCsv(summary, sessionReps, sessionLogs), 'text/csv');
+    downloadTextFile(`pushup-session-${summary.id}.csv`, buildCsv(summary, orderedReps, sessionLogs), 'text/csv');
   };
+
+  const closeAdmin = useCallback(() => setAdminOpen(false), []);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
 
   useEffect(() => {
     localStorage.setItem(SESSION_NAME_KEY, athleteName);
@@ -1276,7 +1311,7 @@ export default function App() {
         console.error(error);
         if (!cancelled) {
           setPoseReady(false);
-          setCameraError('Pose model failed to load. Try again.');
+          setCameraError('The pose model failed to load. Check the connection and refresh.');
         }
       }
     })();
@@ -1293,566 +1328,280 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
-    <main className="shell">
-      <section className="hero">
-        <div className="brand-row">
-          <div>
-            <p className="eyebrow">Push-up form coach</p>
-            <h1>Camera coaching for cleaner reps.</h1>
-          </div>
-          <div className="pill">{secureContext ? 'secure context ready' : 'needs HTTPS'}</div>
-        </div>
-      </section>
+  const needsName = workflowMode === 'coaching' && !athleteName.trim();
+  const phaseChip =
+    phase === 'calibrating'
+      ? 'Finding you'
+      : phase === 'countdown'
+        ? 'Get ready'
+        : phase === 'break'
+          ? 'Coaching break'
+          : workflowMode === 'coaching'
+            ? `Set ${currentAttempt} of 2`
+            : 'Free practice';
+  const showCue = modeAllowsVisuals && (phase === 'set' || phase === 'break' || phase === 'calibrating') && currentCue;
 
-      <section className="layout">
-        <div className="camera-card">
-          <div className="video-frame">
-            <video
-              ref={videoRef}
-              className={previewMirrored ? 'video mirror' : 'video'}
-              playsInline
-              muted
-              autoPlay
-            />
-            <canvas ref={canvasRef} className={previewMirrored ? 'overlay mirror' : 'overlay'} />
-            <div className="rep-counter">
-              <span className="rep-counter__label">reps</span>
-              <strong>{reps}</strong>
+  const renderDock = () => {
+    switch (phase) {
+      case 'setup':
+        return (
+          <>
+            {!poseReady || needsName ? (
+              <p className="dock__hint">{!poseReady ? 'Loading the pose coach…' : 'Add your name above to start.'}</p>
+            ) : null}
+            <button className="btn btn--primary btn--xl btn--block" onClick={startSession} disabled={!poseReady || !secureContext || needsName}>
+              <CameraIcon /> Start camera and sound
+            </button>
+          </>
+        );
+      case 'calibrating':
+        return (
+          <div className="btn-row">
+            <button className="btn btn--ghost" onClick={stopSession}>Cancel</button>
+            {checkingElapsedMs >= 3000 ? (
+              <button className="btn btn--primary btn--grow" onClick={() => beginCountdown()}>
+                Start anyway
+              </button>
+            ) : (
+              <span className="dock__status">Hold a push-up position…</span>
+            )}
+          </div>
+        );
+      case 'countdown':
+      case 'set':
+        return (
+          <button className="btn btn--stop btn--xl btn--block" onClick={stopSession}>
+            <StopIcon /> Stop session
+          </button>
+        );
+      case 'break':
+        return (
+          <div className="btn-row">
+            <button className="btn btn--ghost" onClick={stopSession}>End</button>
+            <button className="btn btn--primary btn--xl btn--grow" onClick={startSetTwo}>
+              Start set 2
+            </button>
+          </div>
+        );
+      case 'results':
+        return (
+          <div className="btn-row">
+            <button className="btn btn--ghost" onClick={resetForRetry} aria-label="Try again with the same name">
+              <RetryIcon /> Try again
+            </button>
+            {uploadState === 'done' ? (
+              <button className="btn btn--primary btn--xl btn--grow" onClick={nextVolunteer}>
+                Next volunteer
+              </button>
+            ) : (
+              <button
+                className="btn btn--primary btn--xl btn--grow"
+                onClick={uploadResult}
+                disabled={uploadState === 'uploading' || !athleteName.trim() || !sessionReps.length}
+              >
+                <UploadIcon /> {uploadState === 'uploading' ? 'Uploading…' : uploadState === 'error' ? 'Retry upload' : 'Upload result'}
+              </button>
+            )}
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className={`app app--${phase}`}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 15h4l2-5 3 9 2.5-6H21" /></svg>
+          </span>
+          <span className="brand__name">Form Coach</span>
+        </div>
+        <div className="topbar__actions">
+          {!cameraActive ? (
+            <button className="icon-button icon-button--labeled" onClick={() => setHistoryOpen(true)} aria-label={`History, ${history.length} saved`}>
+              <HistoryIcon />
+              <span>History</span>
+              {history.length ? <span className="count-badge">{history.length}</span> : null}
+            </button>
+          ) : null}
+          <button
+            className={adminUnlocked ? 'icon-button icon-button--labeled is-admin' : 'icon-button icon-button--labeled'}
+            onClick={() => setAdminOpen(true)}
+            aria-label={adminUnlocked ? 'Admin tools (unlocked)' : 'Admin'}
+          >
+            {adminUnlocked ? <UnlockIcon /> : <LockIcon />}
+            <span>Admin</span>
+          </button>
+        </div>
+      </header>
+
+      <Stepper steps={steps} activeKey={stepKey} />
+
+      <main className="layout">
+        <section className={cameraActive ? 'stage-col' : 'stage-col is-dormant'} aria-hidden={!cameraActive}>
+          <div className="stage">
+            <video ref={videoRef} className={previewMirrored ? 'stage__video mirror' : 'stage__video'} playsInline muted autoPlay />
+            <canvas ref={canvasRef} className={previewMirrored ? 'stage__overlay mirror' : 'stage__overlay'} />
+            <div className="stage__scrim" aria-hidden="true" />
+
+            <div className="stage__top">
+              <span className={`chip chip--${phase}`}>{phaseChip}</span>
+              {phase === 'set' || phase === 'break' ? (
+                <div className="rep-counter" aria-live="polite">
+                  <strong>{currentSetReps.length}</strong>
+                  <span>{workflowMode === 'coaching' ? `of ${REPS_PER_SET}` : 'reps'}</span>
+                </div>
+              ) : null}
+              {lastRep && (phase === 'set' || phase === 'break') ? (
+                <span className="chip chip--score">Last {lastRep.score}</span>
+              ) : (
+                <span className="chip chip--ghost">{cameraView === 'head-on' ? 'Head-on' : 'Side'}</span>
+              )}
             </div>
-            <div className="status-badges">
-              <span>{cameraStatus === 'live' ? 'live' : cameraStatus}</span>
-              <span>camera</span>
-              <span>{cameraView}</span>
-              <span>{feedbackMode}</span>
-            </div>
-            {activeBanner ? <div className="urgent-banner">{activeBanner}</div> : null}
-            <div className="calibration-overlay">
-              <span className={calibrationState === 'countdown' || calibrationState === 'counting' ? 'calibration-overlay__badge calibration-overlay__badge--ready' : 'calibration-overlay__badge'}>
-                {calibrationStatusText}
-              </span>
-              <span className="calibration-overlay__meter">{`${Math.round(calibrationConfidence)}% confidence`}</span>
-            </div>
+
+            {workflowMode === 'coaching' && phase === 'set' ? (
+              <div className="set-dots" aria-hidden="true">
+                {Array.from({ length: REPS_PER_SET }, (_, index) => (
+                  <span key={index} className={index < currentSetReps.length ? 'set-dot is-done' : 'set-dot'} />
+                ))}
+              </div>
+            ) : null}
+
+            {activeBanner && phase !== 'countdown' ? <div className="stage__alert" role="alert">{activeBanner}</div> : null}
+
+            {phase === 'calibrating' ? (
+              <div className="stage__center">
+                <ConfidenceRing value={calibrationConfidence} />
+                <p className="stage__caption">{calibrationState === 'ready' ? 'Locked in — hold still' : 'Hold the top of a push-up'}</p>
+              </div>
+            ) : null}
+
+            {phase === 'countdown' ? (
+              <div className="stage__center" aria-live="assertive">
+                {countdownValue === null ? (
+                  <p className="stage__announce">{currentAttempt === 2 ? 'Set 2 — get ready' : 'Calibration complete'}</p>
+                ) : (
+                  <span key={countdownValue} className="countdown-number">{countdownValue}</span>
+                )}
+              </div>
+            ) : null}
+
             {showGoOverlay ? (
               <div className="go-overlay" aria-hidden="true">
                 <div className="go-overlay__text">GO</div>
               </div>
             ) : null}
-          </div>
 
-          <div className="controls card">
-            <div className="control-row">
-              {cameraOptions.map((option) => (
-                <button key={option.value} className={cameraFacing === option.value ? 'button button--active' : 'button'} onClick={() => setCameraFacing(option.value)}>
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="control-row">
-              {viewOptions.map((option) => (
-                <button
-                  key={option.value}
-                  className={cameraView === option.value ? 'button button--active' : 'button'}
-                  onClick={() => setCameraView(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <p className="setup-copy">{activeViewHelper}</p>
-
-            <div className="control-row">
-              {feedbackOptions.map((option) => (
-                <button key={option.value} className={feedbackMode === option.value ? 'button button--active' : 'button'} onClick={() => setFeedbackMode(option.value)}>
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="control-row">
-              <button className={workflowMode === 'free' ? 'button button--active' : 'button'} onClick={() => setWorkflowMode('free')}>
-                Free practice
-              </button>
-              <button
-                className={workflowMode === 'coaching' ? 'button button--active' : 'button'}
-                onClick={() => {
-                  resetCoachingTrial();
-                }}
-              >
-                Coaching session
-              </button>
-            </div>
-
-            <div className="card coaching-flow-card">
-              <div className="card-head">
-                <h2>Admin</h2>
-                <span className="pill">{adminUnlocked ? 'unlocked' : 'locked'}</span>
-              </div>
-              <p className="muted">Enter the local admin PIN to unlock baseline recording and advanced controls on this device only.</p>
-              <div className="field-row">
-                <label>
-                  Admin PIN
-                  <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} placeholder="180180" inputMode="numeric" />
-                </label>
-              </div>
-              <div className="action-row">
-                <button className="button button--primary" onClick={unlockAdminPin}>
-                  Unlock admin
-                </button>
-                <button className="button" onClick={lockAdminPin}>
-                  Sign out admin
-                </button>
-              </div>
-              <p className="metric-copy">{pinMessage || 'Admin unlock persists on this device until sign-out admin.'}</p>
-            </div>
-
-            <div className="field-row">
-              <label>
-                Display name
-                <input value={athleteName} onChange={(event) => setAthleteName(event.target.value)} placeholder="Optional name" />
-              </label>
-              <label>
-                Session history
-                <input value={`${history.length} saved`} readOnly />
-              </label>
-            </div>
-
-            <div className="session-action-row">
-              {cameraStatus === 'live' ? (
-                <button className="button button--primary button--stop" onClick={stopSession}>
-                  Stop session
-                </button>
-              ) : sessionReps.length || analysis ? (
-                <button className="button button--primary" onClick={resetSet}>
-                  Try again
-                </button>
-              ) : null}
-            </div>
-
-            <div className="action-row">
-              <button className="button button--primary" onClick={workflowMode === 'coaching' ? startCoachingSession : startFreePractice} disabled={!poseReady || !secureContext}>
-                {workflowMode === 'coaching' ? 'Start coaching session' : 'Start camera and sound'}
-              </button>
-              <button
-                className={spokenCoachingEnabled ? 'button button--active' : 'button'}
-                onClick={() => setSpokenCoachingEnabled((value) => !value)}
-              >
-                {spokenCoachingEnabled ? 'Form coaching (spoken): on' : 'Form coaching (spoken): off'}
-              </button>
-            </div>
-
-            <div className="action-row secondary">
-              <button className="button button--primary" onClick={exportNotes} disabled={!sessionReps.length && !analysis}>
-                Export notes
-              </button>
-              <button className="button" onClick={saveCurrentSession} disabled={!sessionReps.length && !analysis}>
-                Save local score
-              </button>
-              <button className="button" onClick={exportCsv} disabled={!sessionReps.length && !analysis}>
-                Export CSV
-              </button>
-            </div>
-
-            <div className="card coaching-flow-card">
-              <div className="card-head">
-                <h2>Admin baseline</h2>
-                <span className="pill">{canManageBaselines ? 'admin' : 'standard user'}</span>
-              </div>
-              <p className="muted">Capture a good reference per angle. Baselines stay local on this device and are used for grading when present.</p>
-              <div className="action-row">
-                <button
-                  className="button"
-                  onClick={() => {
-                    setAdminUnlocked((value) => !value);
-                  }}
-                >
-                  {adminUnlocked ? 'Admin unlocked' : 'Unlock admin'}
-                </button>
-              </div>
-              <div className="control-row">
-                {(['front', 'back', 'side', 'top'] as const).map((angle) => (
-                  <button key={angle} className={baselineAngle === angle ? 'button button--active' : 'button'} onClick={() => setBaselineAngle(angle)}>
-                    {angle}
-                  </button>
-                ))}
-              </div>
-              <div className="action-row">
-                <button
-                  className="button"
-                  disabled={!canManageBaselines || !analysis}
-                  onClick={() => {
-                    if (!analysis) return;
-                    const seeded = createBaselineReference(baselineAngle, analysis, `${baselineAngle} baseline`);
-                    setBaselineDraft(seeded);
-                    pushLog('system', `Seeded ${baselineAngle} draft from current pose.`);
-                  }}
-                >
-                  Use current pose as draft
-                </button>
-                <button
-                  className="button button--primary"
-                  disabled={!canManageBaselines || !baselineDraft}
-                  onClick={() => {
-                    if (!baselineDraft) return;
-                    setBaselines((current) => ({
-                      updatedAt: nowIso(),
-                      references: {
-                        ...current.references,
-                        [baselineAngle]: baselineDraft,
-                      },
-                    }));
-                    pushLog('system', `Saved ${baselineAngle} 100-standard locally.`);
-                  }}
-                >
-                  Save 100 standard
-                </button>
-                <button
-                  className="button"
-                  disabled={!canManageBaselines}
-                  onClick={() => {
-                    setBaselines({
-                      updatedAt: nowIso(),
-                      references: { front: null, back: null, side: null, top: null },
-                    });
-                    pushLog('system', 'Cleared local baselines.');
-                  }}
-                >
-                  Clear baselines
-                </button>
-              </div>
-              <div className="baseline-editor">
-                <div className="baseline-editor__grid">
-                  {[
-                    ['elbowDepthScore', 'Elbow depth target', 0, 100],
-                    ['bodyLineScore', 'Body line target', 0, 100],
-                    ['elbowFlareScore', 'Elbow flare target', 0, 100],
-                    ['handStackScore', 'Hands stacked target', 0, 100],
-                    ['headAlignmentScore', 'Head alignment target', 0, 100],
-                    ['framingScore', 'Framing target', 0, 100],
-                    ['hipSagScore', 'Hip sag target', 0, 100],
-                    ['hipPikeScore', 'Hip pike target', 0, 100],
-                  ].map(([key, label, min, max]) => (
-                    <label key={key as string}>
-                      {label}
-                      <input
-                        type="number"
-                        min={min}
-                        max={max}
-                        value={baselineDraft?.targets?.[key as keyof typeof baselineDraft.targets] ?? ''}
-                        onChange={(event) => {
-                          const value = event.target.value === '' ? null : Number(event.target.value);
-                          setBaselineDraft((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  targets: {
-                                    ...current.targets,
-                                    [key]: value,
-                                  },
-                                }
-                              : current,
-                          );
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <div className="baseline-editor__grid">
-                  {[
-                    ['elbowDepthScore', 'Depth tolerance', 1, 50],
-                    ['bodyLineScore', 'Body line tolerance', 1, 50],
-                    ['elbowFlareScore', 'Elbow flare tolerance', 1, 50],
-                    ['handStackScore', 'Hands stacked tolerance', 1, 50],
-                    ['headAlignmentScore', 'Head alignment tolerance', 1, 50],
-                    ['framingScore', 'Framing tolerance', 1, 50],
-                    ['hipSagScore', 'Hip sag tolerance', 1, 50],
-                    ['hipPikeScore', 'Hip pike tolerance', 1, 50],
-                  ].map(([key, label, min, max]) => (
-                    <label key={`${key as string}-tol`}>
-                      {label}
-                      <input
-                        type="number"
-                        min={min}
-                        max={max}
-                        value={baselineDraft?.tolerances?.[key as keyof typeof baselineDraft.tolerances] ?? ''}
-                        onChange={(event) => {
-                          const value = event.target.value === '' ? null : Number(event.target.value);
-                          setBaselineDraft((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  tolerances: {
-                                    ...current.tolerances,
-                                    [key]: value,
-                                  },
-                                }
-                              : current,
-                          );
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="summary-list">
-                {(['front', 'back', 'side', 'top'] as const).map((angle) => (
-                  <div key={angle} className="muted">
-                    {angle}: {baselines.references[angle] ? 'saved 100 standard' : 'empty'}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {workflowMode === 'coaching' ? (
-              <div className="card coaching-flow-card">
-                <div className="card-head">
-                  <h2>Coaching session</h2>
-                  <span className="pill">{coachingTrialState === 'complete' ? 'done' : coachingTrialState}</span>
-                </div>
-                <p className="muted">Attempt 1 and attempt 2 are exactly 5 push-ups each. Keep the camera live between attempts to coach the form.</p>
-                <div className="score-grid score-grid--compact">
-                  <div>
-                    <span className="muted">Attempt 1</span>
-                    <strong>{coachingAttemptOne.reps}/5</strong>
-                    <span className="muted">{coachingAttemptOne.average || '—'} avg</span>
-                  </div>
-                  <div>
-                    <span className="muted">Attempt 2</span>
-                    <strong>{coachingAttemptTwo.reps}/5</strong>
-                    <span className="muted">{coachingAttemptTwo.average || '—'} avg</span>
-                  </div>
-                  <div>
-                    <span className="muted">Delta</span>
-                    <strong>{coachingAttemptOne.reps && coachingAttemptTwo.reps ? `${coachingDelta >= 0 ? '+' : ''}${coachingDelta}` : '—'}</strong>
-                  </div>
-                </div>
-                <ul className="summary-list">
-                  {coachingSummaryLines.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-                {coachingTrialState === 'between-attempts' ? (
-                  <button className="button button--primary" onClick={continueCoachingAttempt}>
-                    Start attempt 2
-                  </button>
-                ) : null}
+            {showCue ? (
+              <div className="stage__bottom">
+                <p key={currentCue} className="cue-bubble">{currentCue}</p>
               </div>
             ) : null}
-
-            <div className="card coaching-flow-card">
-              <div className="card-head">
-                <h2>Upload result</h2>
-                <span className="pill">{RESULTS_UPLOAD_URL ? 'sheet ready' : 'no webhook'}</span>
-              </div>
-              <p className="muted">Upload a single coaching or free-practice result row to the shared Google Sheet.</p>
-              <div className="action-row">
-                <button className="button button--primary" onClick={uploadResult} disabled={uploadingResult || (!sessionReps.length && !analysis) || !athleteName.trim()}>
-                  {uploadingResult ? 'Uploading…' : 'Upload result'}
-                </button>
-              </div>
-              <p className="metric-copy">{uploadMessage || (RESULTS_UPLOAD_URL ? 'Configured webhook will append one row per result.' : 'Upload unavailable until VITE_RESULTS_UPLOAD_URL is set.')}</p>
-            </div>
           </div>
+        </section>
+
+        <section className="panel-col">
+          {cameraError || !secureContext ? (
+            <div className="alert" role="alert">
+              {!secureContext ? 'Camera access needs HTTPS. Open the Vercel link instead of a local file.' : cameraError}
+            </div>
+          ) : null}
+
+          {phase === 'setup' ? (
+            <SetupPanel
+              name={athleteName}
+              onNameChange={setAthleteName}
+              workflowMode={workflowMode}
+              onWorkflowModeChange={setWorkflowMode}
+              feedbackMode={feedbackMode}
+              onFeedbackModeChange={setFeedbackMode}
+              spokenCoaching={spokenCoachingEnabled}
+              onSpokenCoachingChange={setSpokenCoachingEnabled}
+              cameraFacing={cameraFacing}
+              onCameraFacingChange={setCameraFacing}
+              cameraView={cameraView}
+              onCameraViewChange={setCameraView}
+              hasSavedStandard={Boolean(baselines.references[gradingAngle])}
+              showNameHint={needsName}
+            />
+          ) : null}
+
+          {phase === 'calibrating' ? (
+            <CalibratingPanel checklist={calibrationChecklist} tip={placementTip} waitingForBody={!analysis || analysis.confidence < MIN_SIGNAL} />
+          ) : null}
+
+          {phase === 'countdown' || phase === 'set' ? (
+            <LiveFormPanel
+              title={workflowMode === 'coaching' ? `Set ${currentAttempt} · live form` : 'Live form'}
+              metrics={liveMetrics}
+              visualsAllowed={modeAllowsVisuals}
+              setReps={currentSetReps}
+            />
+          ) : null}
+
+          {phase === 'break' ? (
+            <BreakPanel
+              set1={set1Summary}
+              focusLines={coachingFocusLines(set1Summary)}
+              metrics={liveMetrics}
+              visualsAllowed={modeAllowsVisuals}
+              spokenCoaching={spokenCoachingEnabled}
+              onSpokenCoachingChange={setSpokenCoachingEnabled}
+              audioAllowed={modeAllowsAudio}
+            />
+          ) : null}
+
+          {phase === 'results' ? (
+            <ResultsPanel
+              mode={workflowMode}
+              name={athleteName}
+              onNameChange={setAthleteName}
+              set1={set1Summary}
+              set2={set2Summary}
+              overall={overallSummary}
+              reps={orderedReps}
+              focusLines={focusLines}
+              previousScore={previousScore}
+              uploadState={uploadState}
+              uploadMessage={uploadMessage || 'Upload adds one row to the shared science-fair results sheet.'}
+              savedLocally={savedLocally}
+              onSaveLocal={saveCurrentSession}
+              onExportNotes={exportNotes}
+              onExportCsv={exportCsv}
+            />
+          ) : null}
+
+          <div className="dock">{renderDock()}</div>
+        </section>
+      </main>
+
+      <AdminSheet
+        open={adminOpen}
+        onClose={closeAdmin}
+        unlocked={adminUnlocked}
+        onUnlock={unlockAdmin}
+        onLock={lockAdmin}
+        baselines={baselines}
+        angle={baselineAngle}
+        onAngleChange={setBaselineAngle}
+        gradingAngle={gradingAngle}
+        draft={baselineDraft}
+        onDraftChange={updateDraft}
+        onSeedFromPose={seedDraftFromPose}
+        onSave={saveStandard}
+        onClearAll={clearStandards}
+        live={cameraStatus === 'live' ? analysis : null}
+        logs={sessionLogs}
+      />
+      <HistorySheet open={historyOpen} onClose={closeHistory} history={history} onDelete={deleteHistoryEntry} onClearAll={clearHistory} />
+
+      {toast ? (
+        <div className={`toast toast--${toast.tone}`} role="status" aria-live="polite">
+          {toast.text}
         </div>
-
-        <div className="insights">
-          <article className="card score-card">
-            {modeAllowsVisuals ? (
-              <>
-                <div className="score-grid">
-                  <div>
-                    <span className="muted">Overall</span>
-                    <strong>{analysis ? `${analysis.overallScore}` : '—'}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">Quality</span>
-                    <strong>{currentSummary.quality}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">Confidence</span>
-                    <strong>{analysis ? `${Math.round(analysis.confidence * 100)}%` : '—'}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">Pose</span>
-                    <strong>{analysis?.phase ?? 'idle'}</strong>
-                  </div>
-                </div>
-                {calibrationState !== 'counting' ? (
-                  <div className="checklist">
-                    <p className="metric-copy">{calibrationHintCopy}</p>
-                    {calibrationChecklist.map((item) => (
-                      <div key={item.label} className={item.ok ? 'checklist__item checklist__item--ok' : 'checklist__item checklist__item--bad'}>
-                        <span>{item.ok ? '●' : '○'}</span>
-                        <strong>{item.label}</strong>
-                        <em>{item.detail}</em>
-                      </div>
-                    ))}
-                    {checkingElapsedMs >= 3000 ? (
-                      <button className="button button--primary" onClick={beginCountdown}>
-                        Start anyway
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="metrics">
-                  {metricDefinitions.map((metric) => (
-                    <Metric key={metric.label} label={metric.label} value={metric.value} />
-                  ))}
-                </div>
-                <p className="metric-copy">
-                  {cameraView === 'head-on'
-                    ? 'Head-on view emphasizes depth and body line first. It uses a hip-height proxy for straightness, so Side view is best for judging plank line exactly.'
-                    : 'Side view keeps the classic hip sag / hip pike body-line cues, and the score weights depth + body line the most.'}
-                </p>
-              </>
-            ) : (
-              <div className="calibration-panel">
-                <div className="score-grid">
-                  <div>
-                    <span className="muted">Status</span>
-                    <strong>{calibrationStatusText}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">Frame confidence</span>
-                    <strong>{`${Math.round(calibrationConfidence)}%`}</strong>
-                  </div>
-                  <div>
-                    <span className="muted">View</span>
-                    <strong>{cameraView}</strong>
-                  </div>
-                </div>
-                <div className="checklist">
-                  <p className="metric-copy">{calibrationHintCopy}</p>
-                  {calibrationChecklist.map((item) => (
-                    <div key={item.label} className={item.ok ? 'checklist__item checklist__item--ok' : 'checklist__item checklist__item--bad'}>
-                      <span>{item.ok ? '●' : '○'}</span>
-                      <strong>{item.label}</strong>
-                      <em>{item.detail}</em>
-                    </div>
-                  ))}
-                  {checkingElapsedMs >= 3000 ? (
-                    <button className="button button--primary" onClick={beginCountdown}>
-                      Start anyway
-                    </button>
-                  ) : null}
-                </div>
-                <div className="metric-copy">{neutralCoachText}</div>
-              </div>
-            )}
-          </article>
-
-          <article className="card coaching-card">
-            <div className="card-head">
-              <h2>After-set coaching</h2>
-              <span>{sessionReps.length ? `${sessionReps.length} scored reps` : 'Ready for a set'}</span>
-            </div>
-            <div className="before-after">
-              <div>
-                <span className="muted">Before</span>
-                <strong>{beforeAfter.before}</strong>
-              </div>
-              <div>
-                <span className="muted">After</span>
-                <strong>{beforeAfter.after}</strong>
-              </div>
-              <div>
-                <span className="muted">Delta</span>
-                <strong className={clamp(beforeAfter.delta, -999, 999) >= 0 ? 'positive' : 'negative'}>{beforeAfter.delta >= 0 ? '+' : ''}{beforeAfter.delta}</strong>
-              </div>
-            </div>
-            <p className="cue">
-              {modeAllowsVisuals
-                ? currentCue || 'Start a set to unlock feedback and comparisons.'
-                : neutralCoachText}
-            </p>
-            <ul className="notes">
-              {(modeAllowsVisuals && analysis?.notes.length
-                ? analysis.notes
-                : [
-                    calibrationStatusText,
-                    modeAllowsAudio ? (audioUnlocked ? 'Sound is unlocked and ready.' : 'Tap Start camera and sound for a spoken countdown on iPhone Safari.') : 'No visual coaching in Control mode.',
-                    cameraView === 'head-on' ? 'Head-on is the recommended mobile demo.' : 'Side view is optional and needs a wider tripod setup.',
-                  ]).slice(0, 3).map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          </article>
-
-          <article className="card history-card">
-            <div className="card-head">
-              <h2>Local score history</h2>
-              <span>Saved on this device only</span>
-            </div>
-            <div className="history-actions">
-              <button className="button" onClick={clearHistory} disabled={!history.length}>
-                Clear all
-              </button>
-              <span className="muted">{history.length ? `${history.length} saved` : 'No saved sessions yet.'}</span>
-            </div>
-            <div className="history-list">
-              {history.length === 0 ? null : history.map((entry) => (
-                <details key={entry.id} className="history-item">
-                  <summary className="history-item__summary">
-                    <div>
-                      <strong>{entry.name}</strong>
-                      <span>{new Date(entry.createdAt).toLocaleString()}</span>
-                    </div>
-                    <div className="history-item__stats">
-                      <strong>{entry.reps} reps</strong>
-                      <span>{entry.afterScore} / 100 · {entry.cameraView}</span>
-                    </div>
-                  </summary>
-                  <div className="history-item__body">
-                    <div className="history-item__notes">
-                      <strong>Notes</strong>
-                      {entry.notes.length ? (
-                        <ul>
-                          {entry.notes.map((note, index) => (
-                            <li key={`${entry.id}-${index}`}>{note}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="muted">No notes yet.</p>
-                      )}
-                    </div>
-                    <button className="button" onClick={() => deleteHistoryEntry(entry.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </details>
-              ))}
-            </div>
-          </article>
-
-          <article className="card log-card">
-            <div className="card-head">
-              <h2>Always-on log</h2>
-              <span>{sessionLogs.length} events</span>
-            </div>
-            <div className="log-list">
-              {sessionLogs.length === 0 ? (
-                <p className="muted">Camera and coaching events appear here.</p>
-              ) : (
-                sessionLogs.map((entry) => (
-                  <div key={entry.id} className={`log-item log-item--${entry.kind}`}>
-                    <span>{new Date(entry.at).toLocaleTimeString()}</span>
-                    <strong>{entry.message}</strong>
-                    {entry.details ? <p>{entry.details}</p> : null}
-                  </div>
-                ))
-              )}
-            </div>
-          </article>
-
-        </div>
-      </section>
-
-      {!secureContext ? <div className="banner">Camera access is blocked until the app is served over HTTPS or localhost.</div> : null}
-      {cameraError ? <div className="banner banner--warn">{cameraError}</div> : null}
-      {!poseReady ? <div className="banner">Loading pose model...</div> : null}
-    </main>
+      ) : null}
+    </div>
   );
 }

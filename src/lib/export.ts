@@ -81,8 +81,8 @@ export function buildCsv(summary: SessionSummary, reps: SessionRep[], logs: LogE
       summary.notes.length,
     ].join(','),
     '',
-    ['rep_index', 'view_mode', 'score', 'elbow_depth', 'body_line', 'elbow_flare', 'hip_sag', 'hip_pike', 'hand_stack', 'head_alignment', 'framing', 'confidence', 'notes'].join(','),
-    ...reps.map((rep) => [
+    ['rep_index', 'view_mode', 'score', 'elbow_depth', 'body_line', 'elbow_flare', 'hip_sag', 'hip_pike', 'hand_stack', 'head_alignment', 'framing', 'confidence', 'notes', 'set'].join(','),
+    ...[...reps].sort((a, b) => a.index - b.index).map((rep) => [
       rep.index,
       rep.viewMode,
       rep.score,
@@ -96,6 +96,7 @@ export function buildCsv(summary: SessionSummary, reps: SessionRep[], logs: LogE
       rep.framingScore,
       rep.confidence,
       rep.notes.join(' | ').replaceAll(',', ';'),
+      rep.attempt ?? '',
     ].join(',')),
     '',
     ['log_time', 'kind', 'message', 'details'].join(','),
