@@ -25,7 +25,9 @@ const SESSION_STORAGE_KEY = 'pushup-coach-history';
 const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
-const RESULTS_UPLOAD_URL = import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined;
+const RESULTS_UPLOAD_URL =
+  (import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined) ??
+  'https://script.google.com/macros/s/AKfycbyE8BrKiLi13COPUOqw9oeQObcUP40lrsRkT3jHyeK_BQsMMUWHc9HjZCcF2y0o0Dqw8g/exec';
 
 const cameraOptions: { label: string; value: CameraFacing }[] = [
   { label: 'Front camera', value: 'user' },
