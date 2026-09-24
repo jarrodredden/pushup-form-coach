@@ -523,6 +523,8 @@ export default function App() {
         setCountdownValue(null);
         setCalibration('counting');
         setShowGoOverlay(true);
+        setActiveBanner(null);
+        activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
         repStateRef.current = freshRepState();
         repAccumulatorRef.current = createEmptyRepAccumulator();
         pushLog('info', 'Countdown finished. Counting started.');
@@ -1186,7 +1188,6 @@ export default function App() {
       return false;
     }
     setAdminUnlocked(true);
-    setToast({ tone: 'success', text: 'Admin unlocked on this device.' });
     pushLog('system', 'Admin PIN accepted.');
     return true;
   };
@@ -1339,7 +1340,8 @@ export default function App() {
           : workflowMode === 'coaching'
             ? `Set ${currentAttempt} of 2`
             : 'Free practice';
-  const showCue = modeAllowsVisuals && (phase === 'set' || phase === 'break' || phase === 'calibrating') && currentCue;
+  const showAlert = Boolean(activeBanner) && phase !== 'countdown';
+  const showCue = modeAllowsVisuals && !showAlert && (phase === 'set' || phase === 'break' || phase === 'calibrating') && currentCue;
 
   const renderDock = () => {
     switch (phase) {
@@ -1469,7 +1471,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {activeBanner && phase !== 'countdown' ? <div className="stage__alert" role="alert">{activeBanner}</div> : null}
+            {showAlert ? <div className="stage__alert" role="alert">{activeBanner}</div> : null}
 
             {phase === 'calibrating' ? (
               <div className="stage__center">

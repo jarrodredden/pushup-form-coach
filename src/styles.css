@@ -184,8 +184,9 @@ h1, h2, h3, p { margin: 0; }
   align-items: start;
   gap: 8px;
 }
-.stage__top > :first-child { justify-self: start; }
-.stage__top > :last-child { justify-self: end; }
+.stage__top > :first-child { grid-column: 1; justify-self: start; }
+.stage__top > :last-child { grid-column: 3; justify-self: end; }
+.stage__top > .rep-counter { grid-column: 2; }
 
 .chip {
   display: inline-flex;
@@ -541,6 +542,7 @@ h1, h2, h3, p { margin: 0; }
 .btn:disabled { opacity: 0.42; }
 .btn--primary { background: var(--volt); color: var(--volt-ink); box-shadow: 0 10px 30px rgba(200, 255, 61, 0.18); }
 .btn--primary:hover:not(:disabled) { background: #d4ff66; }
+.btn--primary:disabled { opacity: 1; background: var(--surface-3); color: var(--faint); box-shadow: none; }
 .btn--secondary { background: var(--surface-3); border-color: var(--line-strong); }
 .btn--ghost { background: transparent; border-color: var(--line-strong); color: var(--text); }
 .btn--ghost:hover:not(:disabled) { background: var(--surface-2); }
@@ -886,9 +888,9 @@ h1, h2, h3, p { margin: 0; }
   .stage, .app--break .stage { height: min(820px, calc(100vh - 150px)); }
   .dock {
     position: sticky;
-    bottom: 16px;
-    padding: 0;
-    background: none;
+    bottom: 0;
+    padding: 22px 0 18px;
+    background: linear-gradient(0deg, var(--bg) 72%, rgba(10, 12, 15, 0));
   }
   .dock > * { max-width: none; }
 }

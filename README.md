@@ -1,118 +1,73 @@
 # Push-up Form Coach
 
-A science-fair push-up coach that runs entirely in the browser.
+A science-fair push-up coach that runs entirely in the browser: on-device pose estimation (MediaPipe Tasks Vision), rep counting, explainable form scores, spoken coaching, and a two-set before/after experiment.
 
-## What it does
+Live: https://pushup-form-coach.vercel.app (deploys from `main` on Vercel).
 
-- Uses the webcam with on-device pose estimation through MediaPipe Tasks Vision
-- Counts push-up reps with a simple top-to-bottom-to-top state machine
-- Scores form with explainable metrics:
-  - elbow depth
-  - hip sag
-  - hip pike
-  - hand stack / hands under shoulders when the view is reliable
-- Supports four feedback modes:
-  - control
-  - visual
-  - audio
-  - combined
-- Includes a guided **Coaching session** workflow that runs two 5-rep attempts with a visual/text coaching break in between
-- Supports a local **Admin baseline** recorder for front, back, side, and top reference angles
-- Uses a local **Admin PIN** (`180180`) to unlock baseline/admin controls on this device
-- Includes a camera view switch:
-  - **Head-on** is the recommended phone demo and the default on first load
-  - **Side** is optional for a wider tripod setup
-- Includes a calibration gate and countdown so push-up counting starts only after the person is framed and key points are visible; Ready usually lands around 75-85% on a real phone
-- Keeps always-on logs for camera, cues, and reps
-- Saves local score history by athlete name
-- Exports the current session as CSV or JSON
-- Includes an admin-style baseline capture tool for science-fair demos
+## Running a coaching session (Connor / Enzo)
 
-## Run locally
+The app walks the volunteer through six steps, shown in the progress bar at the top:
+**Name → Frame → Set 1 → Coach → Set 2 → Results**.
 
-```bash
-npm install
-npm run dev
-```
+1. **Name** — type the volunteer's name. Pick **Coaching session** (2 sets of 5) or **Free practice**, and a **Feedback mode** for the experiment (Control / Visual / Audio / Combined). **Spoken form tips** adds the live-coach voice. Camera and view options are under **Camera setup**.
+2. Tap **Start camera and sound**. That single tap also unlocks spoken audio on iPhone Chrome/Safari (the "Ready" clip plays).
+3. **Frame** — prop the phone low on the floor about 1.5 m in front (Head-on) and hold the top of a push-up. The ring fills as tracking locks in; the app says "Calibration complete", counts down 5-4-3-2-1, "Let's get started", then **GO** flashes on the video. **Start anyway** appears after a few seconds if tracking is borderline.
+4. **Set 1** — do 5 push-ups. The big counter and dots track reps; **Stop session** is always at the bottom.
+5. **Coach** — the camera stays live so the volunteer can practice the fix. The panel shows the set 1 score and the top 1–2 things to change (depth, plank line, elbows). Tap **Start set 2** for another countdown.
+6. **Set 2 → Results** — the results screen shows set 1 vs set 2, the point change, a depth / plank line / elbow breakdown, and every rep's score. Tap **Upload result** to add a row to the shared Google Sheet, then **Next volunteer** (clears the name) or **Try again** (same name).
 
-Open the local Vite URL in desktop Chrome or Safari. For iPhone camera testing, use the deployed HTTPS URL.
+**History** (top right) lists sessions saved to this device with **Save to this device** on the results screen.
 
-## iPhone Safari notes
+## Admin: setting the "100 standards"
 
-- The app requests the camera with `playsInline`, `muted`, and `autoPlay` so it works in Safari's video pipeline.
-- Camera access requires a secure context, which means HTTPS or localhost.
-- On iPhone Safari, tap **Start camera** or **Enable sound** once to unlock audio cues. Mobile Safari blocks Web Audio and speech until a user gesture.
-- For the default phone demo, use **Head-on**: place the phone low or on a floor stand in front of the athlete so wrists and feet stay visible.
-- Switch to **Side** only if you have room for the classic side-profile setup.
-- If camera permissions fail, switch to demo mode.
+1. Tap **Admin** (top right) and enter PIN `180180`. Admin stays unlocked on this device until **Sign out admin**.
+2. Under **100 standards**, pick an angle: **Front** (used for Head-on grading), **Side** (used for Side grading), Back, or Top. Each tab shows where to put the phone.
+3. Either type the target for each metric, or start the camera, hold a textbook rep, and tap **Use current pose as draft**.
+4. Set a tolerance for each metric, then **Save … 100 standard**.
+
+How grading uses it: every metric is a 0–100 form score. A rep scoring at or above *target − tolerance* on a metric gets full credit (100); shortfalls scale proportionally toward 0. So target 90 ± 10 means anything 80+ counts as perfect, and 40 scores 50. Views without a saved standard use the built-in scoring. **Diagnostics** shows the live event log.
 
 ## Scoring model
 
-The score is intentionally explainable for a science-fair demo.
+- **Elbow depth** — how far the elbows bend (100 ≈ 85° at the bottom).
+- **Plank line** — shoulders, hips, and ankles in one line. Side view measures hip sag and hip pike (butt up) directly; Head-on uses a hip-height proxy.
+- **Elbow tuck**, **hands under shoulders**, and **head position** fill out the rest.
+- The rep score is weighted mostly toward depth and plank line.
+- Rep counting is separate from form: any real top → bottom → top cycle counts; form only changes the score.
 
-- **Head-on mode** emphasizes elbow depth, elbow flare, hands under shoulders, head alignment, and framing. It does **not** pretend the side-view body line is accurate.
-- **Side mode** keeps the classic hip sag / hip pike body-line cues for a tripod or wider setup.
-- **Hands under shoulders** rewards a stacked wrist/shoulder position when the landmarks are visible enough.
-- Control and Audio modes keep the skeleton hidden; Visual and Combined show the skeleton and live cues.
-- **Rep counting is separate from form scoring**: any completed down-and-back-up cycle counts as a rep, while bad form lowers the score and adds coaching flags.
+## Feedback modes (the experiment)
 
-Rep counts happen only when the app sees a top position, a clear downward move, and a return to the top.
+| Mode | Skeleton + on-screen cues | Spoken countdown / rep counts |
+| --- | --- | --- |
+| Control | no | no |
+| Visual | yes | no |
+| Audio | no | yes |
+| Combined | yes | yes |
+
+**Spoken form tips** is a separate switch (Audio or Combined only) for the live-coach voice lines.
+
+## Results upload (Google Sheet)
+
+Upload posts one row as `text/plain` JSON to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.
+
+The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, and a short user agent.
+
+## Phone tips
+
+- Camera access needs HTTPS — use the Vercel link, not a local file.
+- Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts.
+- Head-on is the recommended setup. Use Side only with room for a tripod about 2 m away.
 
 ## Privacy
 
-- Pose estimation runs on-device in the browser.
-- The app does not upload camera frames or raw pose data.
-- Session history is stored locally in the browser only.
-- CSV and JSON exports are created on your device.
+Pose estimation runs on-device. Camera frames and raw pose data are never uploaded. History and 100 standards live in this browser's localStorage; only the summary row is sent when you tap **Upload result**.
 
-## Science-fair notes
-
-This project is meant to demonstrate how on-device computer vision can provide immediate, explainable feedback for exercise technique.
-
-Suggested demo flow:
-
-1. Open the app on a phone.
-2. Select the back camera if possible.
-3. Start a set and keep the body in frame.
-4. Show the live rep counter and metric bars.
-5. Stop the set and compare the before/after scores.
-6. Export the session for charts or a poster board.
-
-### Coaching session workflow
-
-- Choose **Coaching session** before starting the camera.
-- Attempt 1 is exactly 5 push-ups.
-- The app pauses for live visual coaching and a short text summary.
-- Tap **Start attempt 2** for the second 5-rep set.
-- The coaching card shows the attempt scores and the delta.
-
-### Admin baseline
-
-- Toggle **Admin mode** in the baseline card.
-- Pick an angle: front, back, side, or top.
-- Hold a good rep in frame and tap **Save current baseline**.
-- The baseline is stored locally for this browser and used to bias grading until replaced.
-
-### Google Sheet uploads
-
-The app can upload one result row to the shared sheet after a coaching session or a saved free-practice result.
-
-- Shared spreadsheet: `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`
-- Add `VITE_RESULTS_UPLOAD_URL` in Vercel to point at a Google Apps Script web app URL
-- Local `.env.example` includes the variable name with a placeholder
-
-The Apps Script code lives at `scripts/google-apps-script/Code.gs`.
-Deploy it as a Web App:
-
-- Execute as: Me
-- Who has access: Anyone
-
-The script appends a row with timestamp, volunteer name, mode, attempt scores, delta, reps, notes summary, and a short user-agent.
-
-## Build
+## Develop
 
 ```bash
-npm run build
+npm install
+npm run dev        # local dev server
+npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-Vercel should publish the `dist` folder as a static site.
+UI lives in `src/components/`; the step/phase rules and set summaries are in `src/lib/sessionFlow.ts` (unit tested), and the 100-standard scoring is in `src/lib/baselineStorage.ts`.

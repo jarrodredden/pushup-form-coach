@@ -97,7 +97,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   const confidence = averageVisibility(landmarks, REQUIRED);
   if (!landmarks?.length || confidence < MIN_SIGNAL) {
     const setupHint = viewMode === 'head-on'
-      ? 'Move back until hands, torso, and head are visible for the front-view demo.'
+      ? 'Move back until hands, torso, and head are visible.'
       : 'Move far enough back that the full side profile stays visible.';
     return {
       viewMode,

@@ -100,7 +100,7 @@ export function createBaselineReference(angle: BaselineAngle, analysis: PoseAnal
 export type BaselineMetricKey = keyof BaselinePoseReference['targets'];
 
 export const BASELINE_METRICS: Array<{ key: BaselineMetricKey; label: string; hint: string; sideOnly?: boolean }> = [
-  { key: 'elbowDepthScore', label: 'Elbow depth', hint: 'How low you go. 100 = elbows bent to about 85°.' },
+  { key: 'elbowDepthScore', label: 'Elbow depth', hint: 'How low you go at the bottom of the rep.' },
   { key: 'bodyLineScore', label: 'Plank line', hint: 'Shoulders, hips, and ankles in one straight line.' },
   { key: 'elbowFlareScore', label: 'Elbow tuck', hint: 'Elbows stay close instead of flaring out wide.' },
   { key: 'handStackScore', label: 'Hands under shoulders', hint: 'Wrists stacked below the shoulders.' },
