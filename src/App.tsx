@@ -1352,9 +1352,32 @@ export default function App() {
               </button>
             </div>
 
+            <div className="card coaching-flow-card">
+              <div className="card-head">
+                <h2>Admin</h2>
+                <span className="pill">{adminUnlocked ? 'unlocked' : 'locked'}</span>
+              </div>
+              <p className="muted">Enter the local admin PIN to unlock baseline recording and advanced controls on this device only.</p>
+              <div className="field-row">
+                <label>
+                  Admin PIN
+                  <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} placeholder="180180" inputMode="numeric" />
+                </label>
+              </div>
+              <div className="action-row">
+                <button className="button button--primary" onClick={unlockAdminPin}>
+                  Unlock admin
+                </button>
+                <button className="button" onClick={lockAdminPin}>
+                  Sign out admin
+                </button>
+              </div>
+              <p className="metric-copy">{pinMessage || 'Admin unlock persists on this device until sign-out admin.'}</p>
+            </div>
+
             <div className="field-row">
               <label>
-                Athlete name
+                Display name
                 <input value={athleteName} onChange={(event) => setAthleteName(event.target.value)} placeholder="Optional name" />
               </label>
               <label>
@@ -1404,7 +1427,7 @@ export default function App() {
                 <h2>Admin baseline</h2>
                 <span className="pill">{canManageBaselines ? 'admin' : 'standard user'}</span>
               </div>
-              <p className="muted">Capture a good reference per angle. Baselines are local now and can sync from Supabase later.</p>
+              <p className="muted">Capture a good reference per angle. Baselines stay local on this device and are used for grading when present.</p>
               <div className="action-row">
                 <button
                   className="button"
@@ -1461,30 +1484,6 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className="card coaching-flow-card">
-              <div className="card-head">
-                <h2>Admin PIN</h2>
-                <span className="pill">{adminUnlocked ? 'unlocked' : 'locked'}</span>
-              </div>
-              <p className="muted">Enter the admin PIN on this device to unlock baselines and advanced controls. No cloud account required for the demo.</p>
-              <div className="field-row">
-                <label>
-                  Admin PIN
-                  <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} placeholder="180180" inputMode="numeric" />
-                </label>
-              </div>
-              <div className="action-row">
-                <button className="button button--primary" onClick={unlockAdminPin}>
-                  Unlock admin
-                </button>
-                <button className="button" onClick={lockAdminPin}>
-                  Sign out admin
-                </button>
-              </div>
-              <p className="muted">Volunteer name is required for coaching sessions and sheet uploads.</p>
-              <p className="metric-copy">{pinMessage || 'Admin unlock persists on this device until sign-out admin.'}</p>
             </div>
 
             {workflowMode === 'coaching' ? (
