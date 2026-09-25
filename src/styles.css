@@ -73,6 +73,18 @@ h1, h2, h3, p { margin: 0; }
 }
 .brand__mark svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 .brand__name { font-size: 1.05rem; }
+.brand__tag {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--volt);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.offline-link { padding: 4px 4px 0; text-align: center; font-size: 0.86rem; color: var(--muted); }
+.offline-link a { color: var(--volt); font-weight: 700; }
 .topbar__actions { display: flex; gap: 6px; }
 
 .icon-button {

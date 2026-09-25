@@ -1,4 +1,4 @@
-const VOICE_CLIP_ROOT = '/voices';
+const VOICE_CLIP_ROOT = `${import.meta.env.BASE_URL}voices`;
 const VOICE_QUEUE_LIMIT = 10;
 
 type VoiceQueueItem = {

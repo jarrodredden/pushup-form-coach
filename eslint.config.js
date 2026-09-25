@@ -24,7 +24,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist'],
+    ignores: ['dist', 'dist-offline', 'release', 'public/mediapipe'],
+  },
+  {
+    files: ['scripts/build-offline.mjs', 'scripts/copy-mediapipe.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { console: 'readonly', process: 'readonly', Buffer: 'readonly', URL: 'readonly' },
+    },
   },
   {
     files: ['**/*.{ts,tsx}'],

@@ -1,5 +1,8 @@
 node_modules
 /dist
+/dist-offline
+/release
+/public/mediapipe
 .DS_Store
 .env
 .env.local

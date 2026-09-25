@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { AdminSheet } from './components/AdminSheet';
 import { HistorySheet } from './components/HistorySheet';
 import { CameraIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
@@ -33,6 +33,7 @@ import {
   type CoachingTrialState,
   type WorkflowMode,
 } from './lib/sessionFlow';
+import { isOfflinePackage, loadPoseAssets } from './lib/poseAssets';
 import { loadHistory, saveHistory } from './lib/storage';
 import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
 import type {
@@ -49,8 +50,6 @@ import type {
   SessionSummary,
 } from './lib/types';
 
-const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
-const POSE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
 const SESSION_STORAGE_KEY = 'pushup-coach-history';
 const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
@@ -67,6 +66,25 @@ type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
 const nowIso = () => new Date().toISOString();
 const freshRepState = () => ({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
+
+let poseLandmarkerPromise: Promise<PoseLandmarker> | null = null;
+
+function createPoseLandmarker() {
+  poseLandmarkerPromise ??= loadPoseAssets().then(({ fileset, baseOptions }) =>
+    PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { ...baseOptions, delegate: 'CPU' },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.45,
+      minPosePresenceConfidence: 0.45,
+      minTrackingConfidence: 0.45,
+    }),
+  );
+  poseLandmarkerPromise.catch(() => {
+    poseLandmarkerPromise = null;
+  });
+  return poseLandmarkerPromise;
+}
 
 function speak(message: string) {
   playVoiceMessage(message);
@@ -578,7 +596,6 @@ export default function App() {
       'keep-head-centered',
       'keep-hips-level',
       'back-up-for-hands-and-torso',
-      'move-back-or-lower-the-phone',
       'good-rep-a-little-more-depth-and-youre-golden',
       'nice-that-was-a-strong-one',
       'yes-deep-and-solid',
@@ -1164,9 +1181,14 @@ export default function App() {
       pushLog('system', 'Result uploaded to Google Sheet.');
     } catch (error) {
       console.error(error);
+      const offline = !navigator.onLine;
       setUploadState('error');
-      setUploadMessage('Upload failed — check the connection and try again. Export notes still works offline.');
-      setToast({ tone: 'error', text: 'Upload failed. Try again.' });
+      setUploadMessage(
+        offline
+          ? 'No internet, so the result wasn’t uploaded. Tap Save to this device or Export notes now, and upload later when online.'
+          : 'Upload failed — the sheet may be blocked on this network. Save to this device or Export notes instead.',
+      );
+      setToast({ tone: 'error', text: offline ? 'Offline — upload skipped.' : 'Upload failed. Try again.' });
     }
   };
 
@@ -1287,32 +1309,25 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     if (!secureContext) {
-      setCameraError('Camera access requires HTTPS or localhost.');
+      setCameraError('Camera access requires HTTPS, localhost, or opening the offline package file directly.');
       return;
     }
 
     (async () => {
       try {
         if (!poseRef.current) {
-          const resolver = await FilesetResolver.forVisionTasks(POSE_WASM_URL);
-          poseRef.current = await PoseLandmarker.createFromOptions(resolver, {
-            baseOptions: {
-              modelAssetPath: POSE_MODEL_URL,
-              delegate: 'CPU',
-            },
-            runningMode: 'VIDEO',
-            numPoses: 1,
-            minPoseDetectionConfidence: 0.45,
-            minPosePresenceConfidence: 0.45,
-            minTrackingConfidence: 0.45,
-          });
+          poseRef.current = await createPoseLandmarker();
         }
         if (!cancelled) setPoseReady(true);
       } catch (error) {
         console.error(error);
         if (!cancelled) {
           setPoseReady(false);
-          setCameraError('The pose model failed to load. Check the connection and refresh.');
+          setCameraError(
+            isOfflinePackage
+              ? 'The pose model failed to load. Re-extract the whole offline folder and open index.html again.'
+              : 'The pose model failed to load. Check the connection and refresh.',
+          );
         }
       }
     })();
@@ -1419,6 +1434,7 @@ export default function App() {
             <svg viewBox="0 0 24 24"><path d="M3 15h4l2-5 3 9 2.5-6H21" /></svg>
           </span>
           <span className="brand__name">Form Coach</span>
+          {isOfflinePackage ? <span className="brand__tag">Offline</span> : null}
         </div>
         <div className="topbar__actions">
           {!cameraActive ? (
@@ -1507,7 +1523,7 @@ export default function App() {
         <section className="panel-col">
           {cameraError || !secureContext ? (
             <div className="alert" role="alert">
-              {!secureContext ? 'Camera access needs HTTPS. Open the Vercel link instead of a local file.' : cameraError}
+              {!secureContext ? 'Camera access is blocked on plain http:// addresses. Open the app over https://, localhost, or open the offline package’s index.html file directly.' : cameraError}
             </div>
           ) : null}
 
@@ -1527,6 +1543,7 @@ export default function App() {
               onCameraViewChange={setCameraView}
               hasSavedStandard={Boolean(baselines.references[gradingAngle])}
               showNameHint={needsName}
+              offlineDownloadHref={isOfflinePackage ? undefined : `${import.meta.env.BASE_URL}downloads/pushup-form-coach-offline.zip`}
             />
           ) : null}
 
