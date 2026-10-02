@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { FOCUS_LINES } from './coaching';
-import { activeStepKey, attemptForTrialState, coachingFocusLines, deriveJourneyPhase, journeySteps, REPS_PER_SET, summarizeReps, trialStateAfterRep } from './sessionFlow';
+import {
+  activeStepKey,
+  attemptForTrialState,
+  coachingFocusLines,
+  deriveJourneyPhase,
+  formatRestClock,
+  journeySteps,
+  REPS_PER_SET,
+  REST_BREAK_MS,
+  restRemainingMs,
+  summarizeReps,
+  trialStateAfterRep,
+} from './sessionFlow';
 
 const base = {
   cameraStatus: 'live' as const,
@@ -84,6 +96,26 @@ describe('coaching session flow', () => {
     expect(activeStepKey('set', 'free', 'idle')).toBe('set');
     expect(activeStepKey('setup', 'coaching', 'idle')).toBe('setup');
     expect(activeStepKey('setup', 'coaching', 'idle', true)).toBe('consent');
+  });
+
+  it('locks set 2 for exactly 120 seconds of rest', () => {
+    const start = 1_000_000;
+    expect(REST_BREAK_MS).toBe(120_000);
+    expect(restRemainingMs(null, start)).toBe(REST_BREAK_MS);
+    expect(restRemainingMs(start, start)).toBe(120_000);
+    expect(restRemainingMs(start, start + 119_999)).toBe(1);
+    expect(restRemainingMs(start, start + 120_000)).toBe(0);
+    expect(restRemainingMs(start, start + 500_000)).toBe(0);
+    expect(restRemainingMs(start, start - 5_000)).toBe(120_000);
+  });
+
+  it('formats the rest countdown as m:ss', () => {
+    expect(formatRestClock(120_000)).toBe('2:00');
+    expect(formatRestClock(119_001)).toBe('2:00');
+    expect(formatRestClock(119_000)).toBe('1:59');
+    expect(formatRestClock(65_000)).toBe('1:05');
+    expect(formatRestClock(1)).toBe('0:01');
+    expect(formatRestClock(0)).toBe('0:00');
   });
 
   it('puts a consent step between Name and Frame in both session types', () => {

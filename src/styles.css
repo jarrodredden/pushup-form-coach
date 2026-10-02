@@ -647,6 +647,17 @@ h1, h2, h3, p { margin: 0; }
 .break-card__score strong { font-size: 2.6rem; line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; }
 .break-card .focus-list { margin-top: 10px; }
 
+.rest-card { gap: 10px; border-color: var(--volt-soft); }
+.rest-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rest-card__label { font-size: 0.78rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--volt); }
+.rest-card__clock { font-size: clamp(2.6rem, 11vw, 3.4rem); line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; }
+.rest-card__track { height: 10px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.rest-card__fill { height: 100%; border-radius: inherit; background: var(--volt); transition: width 240ms linear; }
+.rest-card--done { border-color: rgba(74, 222, 128, 0.4); }
+.rest-card--done .rest-card__label { color: var(--good); }
+.rest-card--done .rest-card__fill { background: var(--good); }
+.rest-card__admin { justify-self: start; border: 1px dashed var(--mid); color: var(--mid); }
+
 /* ---------- Results ---------- */
 .results { display: grid; gap: 14px; }
 .results__head { display: grid; gap: 4px; padding: 6px 2px 2px; }

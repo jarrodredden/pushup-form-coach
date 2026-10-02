@@ -2,6 +2,19 @@ import { FOCUS_LINES, HIP_BIAS_MIN, rankCoachingTips } from './coaching';
 import type { CameraViewMode } from './types';
 
 export const REPS_PER_SET = 5;
+/** Mandatory rest between coaching sets so set 2 isn't skewed by fatigue. */
+export const REST_BREAK_MS = 120_000;
+
+/** Wall-clock based so a throttled or backgrounded tab can't shorten the rest. Unknown start = fully locked. */
+export function restRemainingMs(startedAt: number | null, now: number, durationMs = REST_BREAK_MS) {
+  if (startedAt === null) return durationMs;
+  return Math.min(durationMs, Math.max(0, durationMs - (now - startedAt)));
+}
+
+export function formatRestClock(remainingMs: number) {
+  const totalSeconds = Math.ceil(Math.max(0, remainingMs) / 1000);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`;
+}
 
 export type WorkflowMode = 'free' | 'coaching';
 export type CoachingTrialState = 'idle' | 'attempt-1' | 'between-attempts' | 'attempt-2' | 'complete';

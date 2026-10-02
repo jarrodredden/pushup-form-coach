@@ -74,6 +74,11 @@ export function LiveFormPanel({
 }
 
 export function BreakPanel({
+  restRemainingMs,
+  restTotalMs,
+  restClock,
+  adminUnlocked,
+  onAdminSkipRest,
   set1,
   focusLines,
   metrics,
@@ -82,6 +87,11 @@ export function BreakPanel({
   onSpokenCoachingChange,
   audioAllowed,
 }: {
+  restRemainingMs: number;
+  restTotalMs: number;
+  restClock: string;
+  adminUnlocked: boolean;
+  onAdminSkipRest: () => void;
   set1: SetSummary;
   focusLines: string[];
   metrics: Array<{ label: string; value: number | null }>;
@@ -90,8 +100,37 @@ export function BreakPanel({
   onSpokenCoachingChange: (value: boolean) => void;
   audioAllowed: boolean;
 }) {
+  const resting = restRemainingMs > 0;
+  const restProgress = restTotalMs > 0 ? Math.min(1, Math.max(0, 1 - restRemainingMs / restTotalMs)) : 1;
   return (
     <>
+      <section className={resting ? 'card rest-card' : 'card rest-card rest-card--done'} aria-live="polite">
+        <div className="rest-card__head">
+          <span className="rest-card__label">{resting ? 'Rest' : 'Rest complete'}</span>
+          <strong className="rest-card__clock" role="timer" aria-label={`Rest ${restClock} remaining`}>
+            {restClock}
+          </strong>
+        </div>
+        <div
+          className="rest-card__track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(restProgress * 100)}
+        >
+          <div className="rest-card__fill" style={{ width: `${restProgress * 100}%` }} />
+        </div>
+        <p className="fine-print">
+          {resting
+            ? 'Catch your breath so set 2 isn’t skewed by fatigue. Review your focus below — set 2 unlocks when the timer hits 0:00.'
+            : 'You’re rested. Tap Start set 2 when you’re ready.'}
+        </p>
+        {adminUnlocked && resting ? (
+          <button type="button" className="btn btn--ghost btn--small rest-card__admin" onClick={onAdminSkipRest}>
+            Skip rest (admin only — testing)
+          </button>
+        ) : null}
+      </section>
       <section className="card break-card">
         <div className="break-card__score">
           <span>Set 1 score</span>

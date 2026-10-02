@@ -54,8 +54,11 @@ import {
   attemptForTrialState,
   coachingFocusLines,
   deriveJourneyPhase,
+  formatRestClock,
   journeySteps,
   REPS_PER_SET,
+  REST_BREAK_MS,
+  restRemainingMs,
   summarizeReps,
   trialStateAfterRep,
   type CalibrationState,
@@ -224,6 +227,9 @@ export default function App() {
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('coaching');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
+  const [restStartedAt, setRestStartedAt] = useState<number | null>(null);
+  const [restBypassed, setRestBypassed] = useState(false);
+  const [restNow, setRestNow] = useState(() => Date.now());
   const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem(ADMIN_UNLOCK_KEY) === '1');
   const [adminOpen, setAdminOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -344,6 +350,28 @@ export default function App() {
       }
     };
   }, [calibrationState]);
+  useEffect(() => {
+    if (coachingTrialState !== 'between-attempts' || restBypassed) return;
+    if (restStartedAt === null) {
+      setRestStartedAt(Date.now());
+      return;
+    }
+    setRestNow(Date.now());
+    if (restRemainingMs(restStartedAt, Date.now()) <= 0) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setRestNow(now);
+      if (restRemainingMs(restStartedAt, now) > 0) return;
+      window.clearInterval(timer);
+      setCurrentCue('Rest complete. Start set 2 when you’re ready.');
+      setToast({ tone: 'success', text: 'Rest complete — set 2 is unlocked.' });
+      pushLog('system', 'Rest complete. Set 2 unlocked.');
+      if (audioContextRef.current && audioUnlockedRef.current && feedbackModeRef.current !== 'visual') {
+        playCueTone(audioContextRef.current);
+      }
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [coachingTrialState, restStartedAt, restBypassed]);
 
   const setCalibration = (next: CalibrationState) => {
     calibrationStateRef.current = next;
@@ -378,6 +406,9 @@ export default function App() {
   const steps = journeySteps(workflowMode);
   const stepKey = activeStepKey(phase, workflowMode, coachingTrialState, Boolean(athleteName.trim()));
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
+  const restRemaining = restBypassed ? 0 : restRemainingMs(restStartedAt, restNow);
+  const restLocked = coachingTrialState === 'between-attempts' && restRemaining > 0;
+  const restClock = formatRestClock(restRemaining);
 
   const currentAttempt: 0 | 1 | 2 =
     workflowMode !== 'coaching'
@@ -593,6 +624,8 @@ export default function App() {
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = freshRepState();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    setRestStartedAt(null);
+    setRestBypassed(false);
   };
 
   const unlockSound = async () => {
@@ -797,8 +830,12 @@ export default function App() {
     setPaused(true);
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
     if (nextTrialState === 'between-attempts') {
-      pushLog('system', 'Set 1 complete. Coaching break.');
-      setCurrentCue('Set 1 done! Adjust your form, then start set 2.');
+      const startedAt = Date.now();
+      setRestStartedAt(startedAt);
+      setRestNow(startedAt);
+      setRestBypassed(false);
+      pushLog('system', `Set 1 complete. ${formatRestClock(REST_BREAK_MS)} rest before set 2.`);
+      setCurrentCue('Set 1 done! Rest for 2 minutes and review your focus for set 2.');
     } else {
       pushLog('system', 'Set 2 complete.');
       setCurrentCue('Session complete!');
@@ -1064,6 +1101,7 @@ export default function App() {
   };
 
   const startSetTwo = () => {
+    if (restLocked) return;
     attemptRepCountRef.current[2] = 0;
     repStateRef.current = freshRepState();
     repAccumulatorRef.current = createEmptyRepAccumulator();
@@ -1072,6 +1110,14 @@ export default function App() {
     setPaused(false);
     pushLog('system', 'Set 2 started.');
     beginCountdown({ announce: false });
+  };
+
+  const skipRestAsAdmin = () => {
+    if (!adminUnlocked || !restLocked) return;
+    setRestBypassed(true);
+    pushLog('system', `Admin skipped the rest with ${restClock} left.`);
+    setCurrentCue('Rest skipped by admin. Start set 2 when ready.');
+    setToast({ tone: 'info', text: 'Admin: rest skipped for testing.' });
   };
 
   const stopSession = () => {
@@ -1476,7 +1522,9 @@ export default function App() {
       : phase === 'countdown'
         ? 'Get ready'
         : phase === 'break'
-          ? 'Coaching break'
+          ? restLocked
+            ? `Rest ${restClock}`
+            : 'Coaching break'
           : workflowMode === 'coaching'
             ? `Set ${currentAttempt} of 2`
             : 'Free practice';
@@ -1522,8 +1570,19 @@ export default function App() {
         return (
           <div className="btn-row">
             <button className="btn btn--ghost" onClick={stopSession}>End</button>
-            <button className="btn btn--primary btn--xl btn--grow" onClick={startSetTwo}>
-              Start set 2
+            <button
+              className="btn btn--primary btn--xl btn--grow"
+              onClick={startSetTwo}
+              disabled={restLocked}
+              aria-label={restLocked ? `Start set 2 unlocks after rest, ${restClock} left` : 'Start set 2'}
+            >
+              {restLocked ? (
+                <>
+                  <LockIcon /> Rest {restClock}
+                </>
+              ) : (
+                'Start set 2'
+              )}
             </button>
           </div>
         );
@@ -1699,6 +1758,11 @@ export default function App() {
 
           {phase === 'break' ? (
             <BreakPanel
+              restRemainingMs={restRemaining}
+              restTotalMs={REST_BREAK_MS}
+              restClock={restClock}
+              adminUnlocked={adminUnlocked}
+              onAdminSkipRest={skipRestAsAdmin}
               set1={set1Summary}
               focusLines={coachingFocusLines(set1Summary, cameraView)}
               metrics={liveMetrics}
