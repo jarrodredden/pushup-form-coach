@@ -10,7 +10,7 @@ export interface ConsentSettings {
 }
 
 export const DEFAULT_CONSENT_SETTINGS: ConsentSettings = {
-  studentResearchers: '',
+  studentResearchers: 'Connor Redden, Enzo Sweeney',
   projectTitle: 'AI Camera Push-up Form Coach',
   sponsorName: 'Jarrod Redden',
   sponsorContact: 'Contact through the school',
@@ -36,6 +36,16 @@ export const CONSENT_SECTIONS: Array<{ label: string; text: string }> = [
     text: 'Your name and push-up scores may be added to a shared results spreadsheet used only for this project. Signed consent forms are stored in the project’s Google Drive folder. No video is saved, uploaded, or posted publicly.',
   },
 ];
+
+/** Blank or missing fields fall back to the defaults; non-empty admin overrides are kept as-is. */
+export function withConsentDefaults(settings: Partial<ConsentSettings> | null | undefined): ConsentSettings {
+  const filled = { ...DEFAULT_CONSENT_SETTINGS };
+  for (const key of Object.keys(DEFAULT_CONSENT_SETTINGS) as Array<keyof ConsentSettings>) {
+    const value = settings?.[key];
+    if (typeof value === 'string' && value.trim()) filled[key] = value.trim();
+  }
+  return filled;
+}
 
 export const VOLUNTARY_TEXT =
   'Participation in this study is completely voluntary. If you decide not to participate there will not be negative consequences. Please be aware that if you decide to participate, you may stop participating at any time and you may decide not to answer any specific question.';
@@ -116,6 +126,7 @@ function imageSize(dataUrl: string): Promise<{ width: number; height: number }> 
 
 /** Builds the filled ISEF Human Informed Consent Form and returns the PDF as base64 (no data: prefix). */
 export async function buildConsentPdf(record: ConsentRecord, JsPdf: JsPdfConstructor): Promise<string> {
+  const settings = withConsentDefaults(record.settings);
   const doc = new JsPdf({ unit: 'pt', format: 'letter', orientation: 'portrait' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -191,14 +202,14 @@ export async function buildConsentPdf(record: ConsentRecord, JsPdf: JsPdfConstru
   doc.text('Human Informed Consent Form', pageWidth / 2, y + 14, { align: 'center' });
   y += 30;
 
-  field('Student Researcher(s)', record.settings.studentResearchers);
-  field('Title of Project', record.settings.projectTitle);
+  field('Student Researcher(s)', settings.studentResearchers);
+  field('Title of Project', settings.projectTitle);
   y += 4;
   paragraph(INTRO_TEXT, 10, 'italic', 10);
   for (const section of CONSENT_SECTIONS) field(section.label, section.text);
   field(
     'If you have any questions about this study, feel free to contact',
-    `Adult Sponsor/QS/DS: ${record.settings.sponsorName || '__________'}   Phone/email: ${record.settings.sponsorContact || '__________'}`,
+    `Adult Sponsor/QS/DS: ${settings.sponsorName}   Phone/email: ${settings.sponsorContact}`,
   );
   y += 4;
   paragraph(`Voluntary Participation: ${VOLUNTARY_TEXT}`, 10, 'normal', 8);
@@ -300,7 +311,7 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
-export const loadConsentSettings = (): ConsentSettings => ({ ...DEFAULT_CONSENT_SETTINGS, ...readJson<Partial<ConsentSettings>>(SETTINGS_KEY, {}) });
+export const loadConsentSettings = (): ConsentSettings => withConsentDefaults(readJson<Partial<ConsentSettings>>(SETTINGS_KEY, {}));
 export const saveConsentSettings = (settings: ConsentSettings) => writeJson(SETTINGS_KEY, settings);
 export const loadCurrentConsent = () => readJson<SignedConsent | null>(CURRENT_KEY, null);
 export const saveCurrentConsent = (consent: SignedConsent | null) => writeJson(CURRENT_KEY, consent);

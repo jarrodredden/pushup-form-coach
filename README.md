@@ -31,7 +31,7 @@ Every session starts with the ISEF *Human Informed Consent Form*, filled in for 
 
 The consent is tied to the participant's name: changing the name or tapping **Next volunteer** requires a new signature. **Try again** (same name) keeps it.
 
-**Admin → Consent** edits the blanks printed on the form: Student researcher(s), project title, Adult Sponsor (default Jarrod Redden), and sponsor phone/email. These are saved per device.
+**Admin → Consent** edits the blanks printed on the form: Student researcher(s) (default "Connor Redden, Enzo Sweeney"), project title, Adult Sponsor (default Jarrod Redden), and sponsor phone/email. These are saved per device; a blank field falls back to its default.
 
 ## Admin: setting the "100 standards"
 

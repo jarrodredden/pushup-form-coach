@@ -31,6 +31,7 @@ import {
   saveConsentSettings,
   saveCurrentConsent,
   savePendingConsents,
+  withConsentDefaults,
   type ConsentSettings,
   type ConsentUploadResult,
   type SignedConsent,
@@ -1257,7 +1258,7 @@ export default function App() {
     try {
       const { jsPDF } = await import('jspdf');
       const pdfBase64 = await buildConsentPdf(
-        { id, participantName, ...submission, signedAtIso: signedAt.toISOString(), settings: consentSettings },
+        { id, participantName, ...submission, signedAtIso: signedAt.toISOString(), settings: withConsentDefaults(consentSettings) },
         jsPDF,
       );
       const signed: SignedConsent = {
@@ -1759,7 +1760,7 @@ export default function App() {
         open={consentOpen && Boolean(athleteName.trim())}
         onClose={closeConsent}
         participantName={athleteName.trim()}
-        settings={consentSettings}
+        settings={withConsentDefaults(consentSettings)}
         onSign={signConsent}
       />
       <HistorySheet open={historyOpen} onClose={closeHistory} history={history} onDelete={deleteHistoryEntry} onClearAll={clearHistory} />

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BASELINE_ANGLES, BASELINE_METRICS, elbowDegreesForDepthScore, type BaselineMetricKey } from '../lib/baselineStorage';
-import type { ConsentSettings } from '../lib/consent';
+import { DEFAULT_CONSENT_SETTINGS, type ConsentSettings } from '../lib/consent';
 import type { BaselineAngle, BaselinePoseReference, LogEntry, PoseAnalysis, SavedBaselines } from '../lib/types';
 import { LockIcon, UnlockIcon } from './Icons';
 import { Sheet } from './Sheet';
@@ -214,16 +214,16 @@ function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft,
 }
 
 const CONSENT_FIELDS: Array<{ key: keyof ConsentSettings; label: string; placeholder: string }> = [
-  { key: 'studentResearchers', label: 'Student researcher(s)', placeholder: 'e.g. Connor and Enzo' },
-  { key: 'projectTitle', label: 'Title of project', placeholder: 'AI Camera Push-up Form Coach' },
-  { key: 'sponsorName', label: 'Adult Sponsor / QS / DS', placeholder: 'Jarrod Redden' },
+  { key: 'studentResearchers', label: 'Student researcher(s)', placeholder: DEFAULT_CONSENT_SETTINGS.studentResearchers },
+  { key: 'projectTitle', label: 'Title of project', placeholder: DEFAULT_CONSENT_SETTINGS.projectTitle },
+  { key: 'sponsorName', label: 'Adult Sponsor / QS / DS', placeholder: DEFAULT_CONSENT_SETTINGS.sponsorName },
   { key: 'sponsorContact', label: 'Sponsor phone / email', placeholder: 'School phone or email' },
 ];
 
 function ConsentSettingsEditor({ consentSettings, onConsentSettingsChange, pendingConsentCount, onRetryPendingConsents, onDownloadPendingConsents }: AdminSheetProps) {
   return (
     <div className="standards">
-      <p className="standards__intro">These fill the blanks on every new consent form and PDF. They’re saved on this device.</p>
+      <p className="standards__intro">These fill the blanks on every new consent form and PDF. They’re saved on this device; leave a field empty to use the default shown.</p>
       {CONSENT_FIELDS.map((field) => (
         <label key={field.key} className="field">
           <span className="field__label">{field.label}</span>

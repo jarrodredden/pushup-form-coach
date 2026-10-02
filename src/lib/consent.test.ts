@@ -7,6 +7,8 @@ import {
   consentFileName,
   DEFAULT_CONSENT_SETTINGS,
   isConsentValidFor,
+  loadConsentSettings,
+  withConsentDefaults,
   parseConsentUploadResponse,
   safeFileStem,
   type SignedConsent,
@@ -28,6 +30,41 @@ describe('consent file naming', () => {
     const date = new Date(2026, 9, 1, 14, 5, 9);
     expect(consentFileName('Connor Smith', date)).toBe('consent_Connor-Smith_2026-10-01_14-05-09.pdf');
     expect(consentDateLabel(date)).toBe('10/01/26');
+  });
+});
+
+describe('consent settings defaults', () => {
+  it('names the student researchers by default', () => {
+    expect(DEFAULT_CONSENT_SETTINGS.studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+  });
+
+  it('fills missing or blank fields but keeps custom admin overrides', () => {
+    expect(withConsentDefaults(undefined).studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+    expect(withConsentDefaults({ studentResearchers: '' }).studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+    expect(withConsentDefaults({ studentResearchers: '   ' }).studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+    const custom = withConsentDefaults({ studentResearchers: 'Someone Else', sponsorContact: 'sponsor@school.org' });
+    expect(custom.studentResearchers).toBe('Someone Else');
+    expect(custom.sponsorContact).toBe('sponsor@school.org');
+    expect(custom.sponsorName).toBe(DEFAULT_CONSENT_SETTINGS.sponsorName);
+  });
+
+  it('repairs a previously saved blank researcher field on load', () => {
+    const store = new Map<string, string>();
+    const original = globalThis.localStorage;
+    globalThis.localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    } as unknown as Storage;
+    try {
+      expect(loadConsentSettings().studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+      store.set('pushup-consent-settings', JSON.stringify({ ...DEFAULT_CONSENT_SETTINGS, studentResearchers: '' }));
+      expect(loadConsentSettings().studentResearchers).toBe('Connor Redden, Enzo Sweeney');
+      store.set('pushup-consent-settings', JSON.stringify({ studentResearchers: 'Custom Team' }));
+      expect(loadConsentSettings().studentResearchers).toBe('Custom Team');
+    } finally {
+      globalThis.localStorage = original;
+    }
   });
 });
 
@@ -87,7 +124,7 @@ describe('consent PDF', () => {
         signedAtIso: new Date(2026, 9, 1, 14, 5, 9).toISOString(),
         signatureDataUrl: ONE_PIXEL_PNG,
         assentSignatureDataUrl: null,
-        settings: { ...DEFAULT_CONSENT_SETTINGS, studentResearchers: 'Connor and Enzo' },
+        settings: { ...DEFAULT_CONSENT_SETTINGS, studentResearchers: '  ' },
       },
       jsPDF,
     );
@@ -95,6 +132,7 @@ describe('consent PDF', () => {
     expect(text.startsWith('%PDF-')).toBe(true);
     expect(text).toContain('Human Informed Consent Form');
     expect(text).toContain('Pat Parent');
+    expect(text).toContain('Connor Redden, Enzo Sweeney');
     expect(text).toContain('10/01/26');
     expect(text).toContain('/Subtype /Image');
   });
