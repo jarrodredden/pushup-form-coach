@@ -90,8 +90,14 @@ function doPost(e) {
   }
 }
 
-// Run once from the Apps Script editor to grant the Drive permission before redeploying.
+// Creating (then trashing) a real file makes the editor ask for the full Drive scope that
+// createFile needs; only reading the folder grants too little.
+// After pulling a new Code.gs: paste it in, run authorizeDrive once and approve, then
+// Deploy → Manage deployments → edit → Version: New version → Deploy (same /exec URL).
 function authorizeDrive() {
   const folder = consentFolder_();
-  Logger.log('Consent PDFs will be saved to: ' + folder.getName() + ' (' + folder.getUrl() + ')');
+  const probe = folder.createFile(Utilities.newBlob('consent upload permission check', 'text/plain', 'consent-permission-check.txt'));
+  probe.setTrashed(true);
+  SpreadsheetApp.openById(SPREADSHEET_ID).getName();
+  Logger.log('Drive create access OK. Consent PDFs will be saved to: ' + folder.getName() + ' (' + folder.getUrl() + ')');
 }

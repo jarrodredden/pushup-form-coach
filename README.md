@@ -73,8 +73,8 @@ The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with 
 The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts) into the spreadsheet's parent Drive folder and logs them on a **Consents** tab.
 
 **One-time redeploy for consent PDFs (Jarrod):**
-1. Open the spreadsheet → **Extensions → Apps Script**. Replace the code with the current `scripts/google-apps-script/Code.gs` and **Save**.
-2. Pick the **`authorizeDrive`** function in the toolbar and click **Run**. Approve the new Google Drive permission. The log shows which folder PDFs will go to.
+1. Open the spreadsheet → **Extensions → Apps Script**. Replace the code with the current `scripts/google-apps-script/Code.gs` and **Save**. Optionally, under **Project Settings**, tick **Show "appsscript.json" manifest file in editor** and paste the `oauthScopes` (Sheets + full Drive) from `scripts/google-apps-script/appsscript.json`.
+2. Pick the **`authorizeDrive`** function in the toolbar and click **Run**. Approve the Google Drive permission ("See, edit, create, and delete all of your Google Drive files"). It creates a tiny test file in the folder and trashes it, which forces the full Drive scope that saving PDFs needs. The log shows which folder PDFs will go to. Re-run this any time `Code.gs` changes, or if the app reports "You do not have permission to call DriveApp.Folder.createFile".
 3. **Deploy → Manage deployments**, click the pencil on the existing web app, set **Version: New version**, and **Deploy**. Editing the existing deployment keeps the same `/exec` URL, so the app needs no change. (A brand-new deployment would get a new URL; you'd then set `VITE_RESULTS_UPLOAD_URL`.)
 
 Until this is done, signing still works and PDFs download locally, but the app reports "the upload script needs the consent update". The old script treats any post as a result row, so an attempt may leave a blank row in **Results**. To avoid repeats, the app only re-sends these PDFs when you tap **Retry** (not automatically).
