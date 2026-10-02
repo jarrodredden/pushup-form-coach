@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BASELINE_ANGLES, BASELINE_METRICS, elbowDegreesForDepthScore, type BaselineMetricKey } from '../lib/baselineStorage';
+import type { ConsentSettings } from '../lib/consent';
 import type { BaselineAngle, BaselinePoseReference, LogEntry, PoseAnalysis, SavedBaselines } from '../lib/types';
 import { LockIcon, UnlockIcon } from './Icons';
 import { Sheet } from './Sheet';
@@ -21,6 +22,11 @@ interface AdminSheetProps {
   onClearAll: () => void;
   live: PoseAnalysis | null;
   logs: LogEntry[];
+  consentSettings: ConsentSettings;
+  onConsentSettingsChange: (settings: ConsentSettings) => void;
+  pendingConsentCount: number;
+  onRetryPendingConsents: () => void;
+  onDownloadPendingConsents: () => void;
 }
 
 const parseNumber = (raw: string) => (raw === '' ? null : Math.max(0, Math.min(100, Number(raw))));
@@ -29,7 +35,7 @@ export function AdminSheet(props: AdminSheetProps) {
   const { open, onClose, unlocked } = props;
   const [pin, setPin] = useState('');
   const [pinError, setPinError] = useState('');
-  const [tab, setTab] = useState<'standards' | 'diagnostics'>('standards');
+  const [tab, setTab] = useState<'standards' | 'consent' | 'diagnostics'>('standards');
 
   const submitPin = () => {
     if (props.onUnlock(pin)) {
@@ -81,12 +87,17 @@ export function AdminSheet(props: AdminSheetProps) {
             <button role="tab" aria-selected={tab === 'standards'} className={tab === 'standards' ? 'segmented__item is-active' : 'segmented__item'} onClick={() => setTab('standards')}>
               100 standards
             </button>
+            <button role="tab" aria-selected={tab === 'consent'} className={tab === 'consent' ? 'segmented__item is-active' : 'segmented__item'} onClick={() => setTab('consent')}>
+              Consent
+            </button>
             <button role="tab" aria-selected={tab === 'diagnostics'} className={tab === 'diagnostics' ? 'segmented__item is-active' : 'segmented__item'} onClick={() => setTab('diagnostics')}>
               Diagnostics
             </button>
           </div>
 
-          {tab === 'standards' ? <StandardsEditor {...props} /> : <Diagnostics logs={props.logs} />}
+          {tab === 'standards' ? <StandardsEditor {...props} /> : null}
+          {tab === 'consent' ? <ConsentSettingsEditor {...props} /> : null}
+          {tab === 'diagnostics' ? <Diagnostics logs={props.logs} /> : null}
 
           <button className="btn btn--ghost btn--block" onClick={props.onLock}>
             <LockIcon /> Sign out admin
@@ -197,6 +208,46 @@ function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft,
         >
           Clear all
         </button>
+      </div>
+    </div>
+  );
+}
+
+const CONSENT_FIELDS: Array<{ key: keyof ConsentSettings; label: string; placeholder: string }> = [
+  { key: 'studentResearchers', label: 'Student researcher(s)', placeholder: 'e.g. Connor and Enzo' },
+  { key: 'projectTitle', label: 'Title of project', placeholder: 'AI Camera Push-up Form Coach' },
+  { key: 'sponsorName', label: 'Adult Sponsor / QS / DS', placeholder: 'Jarrod Redden' },
+  { key: 'sponsorContact', label: 'Sponsor phone / email', placeholder: 'School phone or email' },
+];
+
+function ConsentSettingsEditor({ consentSettings, onConsentSettingsChange, pendingConsentCount, onRetryPendingConsents, onDownloadPendingConsents }: AdminSheetProps) {
+  return (
+    <div className="standards">
+      <p className="standards__intro">These fill the blanks on every new consent form and PDF. They’re saved on this device.</p>
+      {CONSENT_FIELDS.map((field) => (
+        <label key={field.key} className="field">
+          <span className="field__label">{field.label}</span>
+          <input
+            className="input"
+            value={consentSettings[field.key]}
+            placeholder={field.placeholder}
+            onChange={(event) => onConsentSettingsChange({ ...consentSettings, [field.key]: event.target.value })}
+          />
+        </label>
+      ))}
+      <div className="placement-note">
+        <strong>Waiting for Drive</strong>
+        <p>
+          {pendingConsentCount
+            ? `${pendingConsentCount} signed PDF${pendingConsentCount === 1 ? ' is' : 's are'} stored on this device and will upload when online.`
+            : 'Every signed PDF has been saved to the Drive folder.'}
+        </p>
+        {pendingConsentCount ? (
+          <div className="btn-row btn-row--wrap">
+            <button className="btn btn--secondary btn--small" onClick={onRetryPendingConsents}>Retry upload now</button>
+            <button className="btn btn--ghost btn--small" onClick={onDownloadPendingConsents}>Download all</button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

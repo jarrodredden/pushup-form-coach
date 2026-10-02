@@ -1,6 +1,6 @@
 import type { WorkflowMode } from '../lib/sessionFlow';
 import type { CameraFacing, CameraViewMode, FeedbackMode } from '../lib/types';
-import { SpeakerIcon } from './Icons';
+import { CheckIcon, DownloadIcon, PenIcon, RetryIcon, SpeakerIcon } from './Icons';
 
 const feedbackModes: Array<{ value: FeedbackMode; label: string; detail: string }> = [
   { value: 'control', label: 'Control', detail: 'No live feedback — camera and rep count only.' },
@@ -25,6 +25,57 @@ interface SetupPanelProps {
   hasSavedStandard: boolean;
   showNameHint: boolean;
   offlineDownloadHref?: string;
+  consent: ConsentCardState;
+  onOpenConsent: () => void;
+  onDownloadConsent: () => void;
+  onRetryConsentUpload: () => void;
+}
+
+export type ConsentDriveState = 'idle' | 'uploading' | 'done' | 'error';
+
+export interface ConsentCardState {
+  signed: boolean;
+  needsName: boolean;
+  summary: string;
+  driveState: ConsentDriveState;
+  driveMessage: string;
+}
+
+function ConsentCard({ consent, onOpen, onDownload, onRetry }: { consent: ConsentCardState; onOpen: () => void; onDownload: () => void; onRetry: () => void }) {
+  return (
+    <section className={consent.signed ? 'card consent-card is-signed' : 'card consent-card'} aria-live="polite">
+      <div className="consent-card__head">
+        <span className="consent-card__badge" aria-hidden="true">{consent.signed ? <CheckIcon /> : <PenIcon />}</span>
+        <div>
+          <h2 className="card__title">Consent form</h2>
+          <p className="consent-card__summary">
+            {consent.signed ? consent.summary : 'Required before the camera starts. A parent or guardian signs (or the participant if 18+).'}
+          </p>
+        </div>
+      </div>
+      {consent.signed ? (
+        <>
+          <p className={`consent-card__drive consent-card__drive--${consent.driveState}`}>{consent.driveMessage}</p>
+          <div className="btn-row btn-row--wrap">
+            <button className="btn btn--secondary btn--small" onClick={onDownload}>
+              <DownloadIcon size={16} /> Download PDF
+            </button>
+            {consent.driveState === 'error' ? (
+              <button className="btn btn--ghost btn--small" onClick={onRetry}>
+                <RetryIcon size={16} /> Retry Drive upload
+              </button>
+            ) : null}
+            <button className="btn btn--ghost btn--small" onClick={onOpen}>Sign again</button>
+          </div>
+        </>
+      ) : (
+        <button className="btn btn--primary btn--block" onClick={onOpen} disabled={consent.needsName}>
+          <PenIcon /> Read &amp; sign consent
+        </button>
+      )}
+      {!consent.signed && consent.needsName ? <p className="field__hint">Enter the participant’s name above first.</p> : null}
+    </section>
+  );
 }
 
 export function SpokenTipsSwitch({ checked, onChange, disabled }: { checked: boolean; onChange: (value: boolean) => void; disabled: boolean }) {
@@ -95,8 +146,10 @@ export function SetupPanel(props: SetupPanelProps) {
             enterKeyHint="done"
           />
         </label>
-        {props.showNameHint ? <p className="field__hint">Add a name to start a coaching session — it labels your results.</p> : null}
+        {props.showNameHint ? <p className="field__hint">Add a name to start — it labels your results and the consent form.</p> : null}
       </section>
+
+      <ConsentCard consent={props.consent} onOpen={props.onOpenConsent} onDownload={props.onDownloadConsent} onRetry={props.onRetryConsentUpload} />
 
       <section className="card">
         <h2 className="card__title">Session</h2>

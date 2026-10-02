@@ -53,14 +53,19 @@ const THEME_BUCKETS: ThemeBucket[] = [
   },
 ];
 
-export function downloadTextFile(filename: string, content: string, type: string) {
-  const blob = new Blob([content], { type });
+export function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function downloadTextFile(filename: string, content: string, type: string) {
+  downloadBlob(filename, new Blob([content], { type }));
 }
 
 export function exportSessionJson(summary: SessionSummary, reps: SessionRep[], logs: LogEntry[], history: unknown[]) {

@@ -84,6 +84,21 @@ export const RetryIcon = (props: IconProps) => (
   </Svg>
 );
 
+export const DownloadIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M12 4v12" />
+    <path d="M7 11l5 5 5-5" />
+    <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16" />
+  </Svg>
+);
+
+export const PenIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" />
+    <path d="M13.5 6.5l4 4" />
+  </Svg>
+);
+
 export const ChevronIcon = (props: IconProps) => (
   <Svg {...props}>
     <path d="M9 6l6 6-6 6" />

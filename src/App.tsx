@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { AdminSheet } from './components/AdminSheet';
+import { ConsentSheet, type ConsentSubmission } from './components/ConsentSheet';
 import { HistorySheet } from './components/HistorySheet';
 import { CameraIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
 import { BreakPanel, CalibratingPanel, LiveFormPanel, type ChecklistItem } from './components/LivePanels';
 import { ResultsPanel } from './components/ResultsPanel';
-import { SetupPanel } from './components/SetupPanel';
+import { SetupPanel, type ConsentDriveState } from './components/SetupPanel';
 import { Stepper } from './components/Stepper';
 import {
   createBaselineReference,
@@ -16,7 +17,25 @@ import {
   scoreAgainstBaseline,
   type BaselineMetricKey,
 } from './lib/baselineStorage';
-import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
+import {
+  base64ToBlob,
+  buildConsentPdf,
+  buildConsentUploadPayload,
+  consentDateLabel,
+  consentFileName,
+  isConsentValidFor,
+  loadConsentSettings,
+  loadCurrentConsent,
+  loadPendingConsents,
+  parseConsentUploadResponse,
+  saveConsentSettings,
+  saveCurrentConsent,
+  savePendingConsents,
+  type ConsentSettings,
+  type ConsentUploadResult,
+  type SignedConsent,
+} from './lib/consent';
+import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
 import { liveCoachingIssues, shortenCue, type CoachingIssueKey } from './lib/coaching';
@@ -211,6 +230,18 @@ export default function App() {
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [uploadMessage, setUploadMessage] = useState('');
   const [savedLocally, setSavedLocally] = useState(false);
+  const [consentSettings, setConsentSettings] = useState<ConsentSettings>(() => loadConsentSettings());
+  const [currentConsent, setCurrentConsent] = useState<SignedConsent | null>(() => loadCurrentConsent());
+  const [pendingConsents, setPendingConsents] = useState<SignedConsent[]>(() => loadPendingConsents());
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentDriveState, setConsentDriveState] = useState<ConsentDriveState>(() =>
+    loadCurrentConsent()?.uploaded ? 'done' : loadCurrentConsent() ? 'error' : 'idle',
+  );
+  const [consentDriveMessage, setConsentDriveMessage] = useState(() =>
+    loadCurrentConsent()?.uploaded
+      ? 'Saved to the project Google Drive folder.'
+      : 'Not in Drive yet — kept on this device for retry. Download a copy to be safe.',
+  );
   const [baselineAngle, setBaselineAngle] = useState<BaselineAngle>('front');
   const [baselines, setBaselines] = useState(() => loadBaselines());
   const [baselineDraft, setBaselineDraft] = useState<BaselinePoseReference | null>(
@@ -344,7 +375,7 @@ export default function App() {
     hasResults: sessionReps.length > 0,
   });
   const steps = journeySteps(workflowMode);
-  const stepKey = activeStepKey(phase, workflowMode, coachingTrialState);
+  const stepKey = activeStepKey(phase, workflowMode, coachingTrialState, Boolean(athleteName.trim()));
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
 
   const currentAttempt: 0 | 1 | 2 =
@@ -1015,8 +1046,11 @@ export default function App() {
   };
 
   const startSession = () => {
+    if (!isConsentValidFor(currentConsent, athleteName)) {
+      setConsentOpen(Boolean(athleteName.trim()));
+      return;
+    }
     if (workflowMode === 'coaching') {
-      if (!athleteName.trim()) return;
       clearSessionData();
       setTrialState('attempt-1');
       setPaused(false);
@@ -1056,6 +1090,9 @@ export default function App() {
   const nextVolunteer = () => {
     resetForRetry();
     setAthleteName('');
+    updateCurrentConsent(null);
+    setConsentDriveState('idle');
+    setConsentDriveMessage('');
   };
 
   useEffect(() => {
@@ -1129,6 +1166,140 @@ export default function App() {
           : 'Upload failed — the sheet may be blocked on this network. Save to this device or Export notes instead.',
       );
       setToast({ tone: 'error', text: offline ? 'Offline — upload skipped.' : 'Upload failed. Try again.' });
+    }
+  };
+
+  const updateCurrentConsent = (next: SignedConsent | null) => {
+    saveCurrentConsent(next);
+    setCurrentConsent(next);
+  };
+
+  const updatePendingConsents = (update: (current: SignedConsent[]) => SignedConsent[]) => {
+    setPendingConsents((current) => savePendingConsents(update(current)));
+  };
+
+  const postConsentToDrive = async (consent: SignedConsent): Promise<ConsentUploadResult> => {
+    if (!navigator.onLine) return { ok: false, error: 'offline' };
+    try {
+      const response = await fetch(RESULTS_UPLOAD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: JSON.stringify(buildConsentUploadPayload(consent)),
+      });
+      if (!response.ok) return { ok: false, error: `HTTP ${response.status}` };
+      return parseConsentUploadResponse(await response.json().catch(() => null));
+    } catch (error) {
+      console.error(error);
+      return { ok: false, error: navigator.onLine ? 'network blocked' : 'offline' };
+    }
+  };
+
+  const uploadConsent = async (consent: SignedConsent) => {
+    setConsentDriveState('uploading');
+    setConsentDriveMessage('Saving the signed PDF to the project Google Drive folder…');
+    const result = await postConsentToDrive(consent);
+    if (result.ok) {
+      const uploaded = { ...consent, uploaded: true };
+      setCurrentConsent((current) => {
+        if (current?.id !== consent.id) return current;
+        saveCurrentConsent(uploaded);
+        return uploaded;
+      });
+      updatePendingConsents((current) => current.filter((item) => item.id !== consent.id));
+      setConsentDriveState('done');
+      setConsentDriveMessage('Saved to the project Google Drive folder.');
+      pushLog('system', `Consent PDF saved to Drive (${consent.fileName}).`);
+      return;
+    }
+    const queued = { ...consent, scriptOutdated: Boolean(result.scriptOutdated) };
+    updatePendingConsents((current) => [...current.filter((item) => item.id !== consent.id), queued]);
+    setConsentDriveState('error');
+    setConsentDriveMessage(
+      result.error === 'offline'
+        ? 'Offline — the signed PDF is kept on this device and uploads to Drive once you’re back online. Download a copy to be safe.'
+        : `Couldn’t save to Drive: ${result.error}. The PDF is kept on this device for retry — download a copy to be safe.`,
+    );
+    pushLog('system', `Consent Drive upload failed: ${result.error}`);
+  };
+
+  const retryPendingConsents = async (manual = false) => {
+    const queue = loadPendingConsents();
+    if (!queue.length || !navigator.onLine) return;
+    let remaining = queue;
+    for (const consent of queue) {
+      if (consent.scriptOutdated && !manual) continue;
+      const result = await postConsentToDrive(consent);
+      if (!result.ok) {
+        remaining = remaining.map((item) => (item.id === consent.id ? { ...item, scriptOutdated: Boolean(result.scriptOutdated) } : item));
+        continue;
+      }
+      remaining = remaining.filter((item) => item.id !== consent.id);
+      setCurrentConsent((current) => {
+        if (current?.id !== consent.id) return current;
+        const uploaded = { ...current, uploaded: true };
+        saveCurrentConsent(uploaded);
+        setConsentDriveState('done');
+        setConsentDriveMessage('Saved to the project Google Drive folder.');
+        return uploaded;
+      });
+    }
+    setPendingConsents(savePendingConsents(remaining));
+    if (remaining.length < queue.length) {
+      setToast({ tone: 'success', text: `${queue.length - remaining.length} signed consent PDF${queue.length - remaining.length === 1 ? '' : 's'} saved to Drive.` });
+    }
+  };
+
+  const signConsent = async (submission: ConsentSubmission) => {
+    const participantName = athleteName.trim();
+    if (!participantName) return false;
+    const signedAt = new Date();
+    const id = `${signedAt.getTime().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    try {
+      const { jsPDF } = await import('jspdf');
+      const pdfBase64 = await buildConsentPdf(
+        { id, participantName, ...submission, signedAtIso: signedAt.toISOString(), settings: consentSettings },
+        jsPDF,
+      );
+      const signed: SignedConsent = {
+        id,
+        participantName,
+        signerRole: submission.signerRole,
+        signerName: submission.signerName,
+        signedAtIso: signedAt.toISOString(),
+        fileName: consentFileName(participantName, signedAt),
+        pdfBase64,
+        uploaded: false,
+      };
+      updateCurrentConsent(signed);
+      setConsentOpen(false);
+      setToast({ tone: 'success', text: 'Consent signed. You can start the camera.' });
+      pushLog('system', `Consent signed by ${submission.signerName} for ${participantName}.`);
+      void uploadConsent(signed);
+      return true;
+    } catch (error) {
+      console.error(error);
+      setToast({ tone: 'error', text: 'Couldn’t create the consent PDF. Try again.' });
+      return false;
+    }
+  };
+
+  const downloadConsent = () => {
+    if (!currentConsent) return;
+    downloadBlob(currentConsent.fileName, base64ToBlob(currentConsent.pdfBase64, 'application/pdf'));
+  };
+
+  const retryConsentUpload = () => {
+    if (currentConsent) void uploadConsent(currentConsent);
+  };
+
+  const updateConsentSettings = (next: ConsentSettings) => {
+    setConsentSettings(next);
+    saveConsentSettings(next);
+  };
+
+  const downloadPendingConsents = () => {
+    for (const consent of pendingConsents) {
+      downloadBlob(consent.fileName, base64ToBlob(consent.pdfBase64, 'application/pdf'));
     }
   };
 
@@ -1212,6 +1383,7 @@ export default function App() {
 
   const closeAdmin = useCallback(() => setAdminOpen(false), []);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const closeConsent = useCallback(() => setConsentOpen(false), []);
 
   useEffect(() => {
     localStorage.setItem(SESSION_NAME_KEY, athleteName);
@@ -1219,6 +1391,14 @@ export default function App() {
 
   useEffect(() => {
     setSecureContext(window.isSecureContext);
+  }, []);
+
+  useEffect(() => {
+    void retryPendingConsents();
+    const onOnline = () => void retryPendingConsents();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1284,7 +1464,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const needsName = workflowMode === 'coaching' && !athleteName.trim();
+  const needsName = !athleteName.trim();
+  const consentSigned = isConsentValidFor(currentConsent, athleteName);
+  const consentSummary = consentSigned && currentConsent
+    ? `Signed by ${currentConsent.signerName}${currentConsent.signerRole === 'guardian' ? ' (parent/guardian)' : ' (participant, 18+)'} on ${consentDateLabel(new Date(currentConsent.signedAtIso))}.`
+    : '';
   const phaseChip =
     phase === 'calibrating'
       ? 'Finding you'
@@ -1303,10 +1487,12 @@ export default function App() {
       case 'setup':
         return (
           <>
-            {!poseReady || needsName ? (
-              <p className="dock__hint">{!poseReady ? 'Loading the pose coach…' : 'Add your name above to start.'}</p>
+            {!poseReady || needsName || !consentSigned ? (
+              <p className="dock__hint">
+                {!poseReady ? 'Loading the pose coach…' : needsName ? 'Add your name above to start.' : 'Sign the consent form above to start.'}
+              </p>
             ) : null}
-            <button className="btn btn--primary btn--xl btn--block" onClick={startSession} disabled={!poseReady || !secureContext || needsName}>
+            <button className="btn btn--primary btn--xl btn--block" onClick={startSession} disabled={!poseReady || !secureContext || needsName || !consentSigned}>
               <CameraIcon /> Start camera and sound
             </button>
           </>
@@ -1484,6 +1670,16 @@ export default function App() {
               hasSavedStandard={Boolean(baselines.references[gradingAngle])}
               showNameHint={needsName}
               offlineDownloadHref={isOfflinePackage ? undefined : `${import.meta.env.BASE_URL}downloads/pushup-form-coach-offline.zip`}
+              consent={{
+                signed: consentSigned,
+                needsName,
+                summary: consentSummary,
+                driveState: consentDriveState,
+                driveMessage: consentDriveMessage,
+              }}
+              onOpenConsent={() => setConsentOpen(true)}
+              onDownloadConsent={downloadConsent}
+              onRetryConsentUpload={retryConsentUpload}
             />
           ) : null}
 
@@ -1553,6 +1749,18 @@ export default function App() {
         onClearAll={clearStandards}
         live={cameraStatus === 'live' ? analysis : null}
         logs={sessionLogs}
+        consentSettings={consentSettings}
+        onConsentSettingsChange={updateConsentSettings}
+        pendingConsentCount={pendingConsents.length}
+        onRetryPendingConsents={() => void retryPendingConsents(true)}
+        onDownloadPendingConsents={downloadPendingConsents}
+      />
+      <ConsentSheet
+        open={consentOpen && Boolean(athleteName.trim())}
+        onClose={closeConsent}
+        participantName={athleteName.trim()}
+        settings={consentSettings}
+        onSign={signConsent}
       />
       <HistorySheet open={historyOpen} onClose={closeHistory} history={history} onDelete={deleteHistoryEntry} onClearAll={clearHistory} />
 

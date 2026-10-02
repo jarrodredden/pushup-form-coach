@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FOCUS_LINES } from './coaching';
-import { activeStepKey, attemptForTrialState, coachingFocusLines, deriveJourneyPhase, REPS_PER_SET, summarizeReps, trialStateAfterRep } from './sessionFlow';
+import { activeStepKey, attemptForTrialState, coachingFocusLines, deriveJourneyPhase, journeySteps, REPS_PER_SET, summarizeReps, trialStateAfterRep } from './sessionFlow';
 
 const base = {
   cameraStatus: 'live' as const,
@@ -82,5 +82,15 @@ describe('coaching session flow', () => {
     expect(activeStepKey('countdown', 'coaching', 'attempt-2')).toBe('set-2');
     expect(activeStepKey('break', 'coaching', 'between-attempts')).toBe('break');
     expect(activeStepKey('set', 'free', 'idle')).toBe('set');
+    expect(activeStepKey('setup', 'coaching', 'idle')).toBe('setup');
+    expect(activeStepKey('setup', 'coaching', 'idle', true)).toBe('consent');
+  });
+
+  it('puts a consent step between Name and Frame in both session types', () => {
+    for (const mode of ['coaching', 'free'] as const) {
+      const keys = journeySteps(mode).map((step) => step.key);
+      expect(keys.indexOf('consent')).toBe(keys.indexOf('setup') + 1);
+      expect(keys.indexOf('calibrating')).toBe(keys.indexOf('consent') + 1);
+    }
   });
 });

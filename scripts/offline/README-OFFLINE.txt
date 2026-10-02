@@ -27,7 +27,11 @@ ON A SCHOOL CHROMEBOOK
    - If it opens in something else: right-click index.html >
      Open with > Chrome. Or drag index.html onto a Chrome window.
 
-4. Tap "Start camera and sound", then tap "Allow" when Chrome asks to
+4. Type the participant's name, tap "Read & sign consent", and have a
+   parent/guardian (or the participant, if 18+) sign with a finger or
+   mouse. The camera can't start until the form is signed.
+
+5. Tap "Start camera and sound", then tap "Allow" when Chrome asks to
    use the camera.
 
 That's it. You'll see an "Offline" tag next to "Form Coach" at the top.
@@ -67,9 +71,14 @@ GOOD TO KNOW
   when the Chromebook has internet and Google isn't blocked. If it
   can't upload, tap "Save to this device" or "Export notes" - the
   session still counts.
+- Consent forms work offline. Signing makes a PDF on the device; tap
+  "Download PDF" to keep a copy. When the Chromebook is online (and
+  Google isn't blocked) the signed PDFs upload to the project's Google
+  Drive folder automatically. Until then they wait on this device
+  (Admin > Consent shows how many are waiting, with "Download all").
 - History, the admin unlock, and the "100 standards" are saved in
   Chrome on this device. They are separate from the website version,
   so an admin needs to set the 100 standards again here
   (Admin > PIN 180180 > 100 standards).
-- Each coaching session: type a name, Start camera and sound, set 1
+- Each coaching session: type a name, sign consent, Start camera and sound, set 1
   (5 push-ups), coaching break, set 2 (5 push-ups), then results.

@@ -47,6 +47,7 @@ export function journeySteps(mode: WorkflowMode): JourneyStep[] {
   if (mode === 'coaching') {
     return [
       { key: 'setup', label: 'Name' },
+      { key: 'consent', label: 'Consent' },
       { key: 'calibrating', label: 'Frame' },
       { key: 'set-1', label: 'Set 1' },
       { key: 'break', label: 'Coach' },
@@ -56,14 +57,17 @@ export function journeySteps(mode: WorkflowMode): JourneyStep[] {
   }
   return [
     { key: 'setup', label: 'Name' },
+    { key: 'consent', label: 'Consent' },
     { key: 'calibrating', label: 'Frame' },
     { key: 'set', label: 'Practice' },
     { key: 'results', label: 'Results' },
   ];
 }
 
-export function activeStepKey(phase: JourneyPhase, mode: WorkflowMode, trialState: CoachingTrialState): string {
-  if (phase === 'setup' || phase === 'results' || phase === 'break') return phase;
+/** During setup, the Consent step lights up once a name is entered. */
+export function activeStepKey(phase: JourneyPhase, mode: WorkflowMode, trialState: CoachingTrialState, hasName = false): string {
+  if (phase === 'setup') return hasName ? 'consent' : 'setup';
+  if (phase === 'results' || phase === 'break') return phase;
   const inSet = phase === 'set' || phase === 'countdown';
   if (mode === 'coaching') {
     if (trialState === 'attempt-2') return inSet ? 'set-2' : 'calibrating';

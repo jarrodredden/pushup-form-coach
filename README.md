@@ -7,9 +7,9 @@ Live: https://pushup-form-coach.vercel.app (deploys from `main` on Vercel).
 ## Running a coaching session (Connor / Enzo)
 
 The app walks the volunteer through six steps, shown in the progress bar at the top:
-**Name → Frame → Set 1 → Coach → Set 2 → Results**.
+**Name → Consent → Frame → Set 1 → Coach → Set 2 → Results**.
 
-1. **Name** — type the volunteer's name. Pick **Coaching session** (2 sets of 5) or **Free practice**, and a **Feedback mode** for the experiment (Control / Visual / Audio / Combined). **Spoken form tips** adds the live-coach voice. Camera and view options are under **Camera setup**.
+1. **Name** — type the volunteer's name. Then **Consent**: tap **Read & sign consent** (see [Consent forms](#consent-forms) below). **Start camera and sound** stays locked until the form is signed for that name. Pick **Coaching session** (2 sets of 5) or **Free practice**, and a **Feedback mode** for the experiment (Control / Visual / Audio / Combined). **Spoken form tips** adds the live-coach voice. Camera and view options are under **Camera setup**.
 2. Tap **Start camera and sound**. That single tap also unlocks spoken audio on iPhone Chrome/Safari (the "Ready" clip plays).
 3. **Frame** — prop the phone low on the floor about 1.5 m in front (Head-on) and hold the top of a push-up. The ring fills as tracking locks in; the app says "Calibration complete", counts down 5-4-3-2-1, "Let's get started", then **GO** flashes on the video. **Start anyway** appears after a few seconds if tracking is borderline.
 4. **Set 1** — do 5 push-ups. The big counter and dots track reps; **Stop session** is always at the bottom.
@@ -17,6 +17,21 @@ The app walks the volunteer through six steps, shown in the progress bar at the 
 6. **Set 2 → Results** — the results screen shows set 1 vs set 2, the point change, a depth / plank line / elbow breakdown, and every rep's score. Tap **Upload result** to add a row to the shared Google Sheet, then **Next volunteer** (clears the name) or **Try again** (same name).
 
 **History** (top right) lists sessions saved to this device with **Save to this device** on the results screen.
+
+## Consent forms
+
+Every session starts with the ISEF *Human Informed Consent Form*, filled in for this project. It covers the purpose, the tasks (5 push-ups, brief coaching, 5 more), time (about 5–10 minutes), risks, benefits, confidentiality, and the Adult Sponsor contact.
+
+1. After the name is entered, tap **Read & sign consent**. The sheet shows the full form.
+2. Choose **Parent / guardian** (the default) or **Participant is 18+**. Type the printed name; the date fills in automatically (mm/dd/yy).
+3. Sign in the white box with a finger, stylus, or mouse (**Clear** to redo). A minor can also add an optional assent signature.
+4. Tap **Sign consent form**. The app builds a one-page PDF on the device (jsPDF) with the filled fields, signature image(s), and date. The consent card then turns green and **Start camera and sound** unlocks.
+5. The PDF uploads to the **same Google Drive folder as the results spreadsheet**, named `consent_<Display-Name>_<YYYY-MM-DD_HH-MM-SS>.pdf` (local time, unsafe characters replaced). Each upload also adds a row to a **Consents** tab in the spreadsheet with a link to the file.
+6. **Download PDF** always saves a local copy. If Drive can't be reached (offline, filter, or an old script), the card says so, the PDF waits on the device, and it retries automatically when the browser comes back online (or tap **Retry Drive upload**). **Admin → Consent** shows how many are waiting, with **Download all**.
+
+The consent is tied to the participant's name: changing the name or tapping **Next volunteer** requires a new signature. **Try again** (same name) keeps it.
+
+**Admin → Consent** edits the blanks printed on the form: Student researcher(s), project title, Adult Sponsor (default Jarrod Redden), and sponsor phone/email. These are saved per device.
 
 ## Admin: setting the "100 standards"
 
@@ -55,6 +70,15 @@ Upload posts one row as `text/plain` JSON to a Google Apps Script web app, which
 
 The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, and a short user agent.
 
+The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts) into the spreadsheet's parent Drive folder and logs them on a **Consents** tab.
+
+**One-time redeploy for consent PDFs (Jarrod):**
+1. Open the spreadsheet → **Extensions → Apps Script**. Replace the code with the current `scripts/google-apps-script/Code.gs` and **Save**.
+2. Pick the **`authorizeDrive`** function in the toolbar and click **Run**. Approve the new Google Drive permission. The log shows which folder PDFs will go to.
+3. **Deploy → Manage deployments**, click the pencil on the existing web app, set **Version: New version**, and **Deploy**. Editing the existing deployment keeps the same `/exec` URL, so the app needs no change. (A brand-new deployment would get a new URL; you'd then set `VITE_RESULTS_UPLOAD_URL`.)
+
+Until this is done, signing still works and PDFs download locally, but the app reports "the upload script needs the consent update". The old script treats any post as a result row, so an attempt may leave a blank row in **Results**. To avoid repeats, the app only re-sends these PDFs when you tap **Retry** (not automatically).
+
 ## School Chromebook / offline
 
 If the school filter blocks `pushup-form-coach.vercel.app`, use the **offline package**: one folder that runs the whole app with no internet and no website. The pose AI (MediaPipe WASM + model) and voice clips are inside it, and the app uses the device's system fonts, so nothing is fetched from a CDN.
@@ -91,7 +115,7 @@ The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
 
 ## Privacy
 
-Pose estimation runs on-device. Camera frames and raw pose data are never uploaded. History and 100 standards live in this browser's localStorage; only the summary row is sent when you tap **Upload result**.
+Pose estimation runs on-device. Camera frames and raw pose data are never uploaded. History and 100 standards live in this browser's localStorage; only the summary row is sent when you tap **Upload result**. Signed consent PDFs go only to the project Drive folder. The current participant's PDF, plus any still waiting to upload, are kept in this browser's localStorage until **Next volunteer** or a successful upload.
 
 ## Develop
 
