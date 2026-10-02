@@ -81,4 +81,5 @@ GOOD TO KNOW
   so an admin needs to set the 100 standards again here
   (Admin > PIN 180180 > 100 standards).
 - Each coaching session: type a name, sign consent, Start camera and sound, set 1
-  (5 push-ups), coaching break, set 2 (5 push-ups), then results.
+  (5 push-ups), coaching break with a required 2-minute rest (Start set 2
+  unlocks at 0:00), set 2 (5 push-ups), then results.
