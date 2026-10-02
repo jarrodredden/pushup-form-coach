@@ -22,25 +22,31 @@ export interface PoseAnalysis {
   framingScore: number;
   hipSagScore: number | null;
   hipPikeScore: number | null;
+  /** Signed hip-line deficit: positive = hips sagging, negative = hips piking, ~0 = level. */
+  hipBias: number;
   confidence: number;
   phase: 'top' | 'bottom' | 'mid' | 'unknown';
   setupHint: string | null;
   notes: string[];
 }
 
-export interface RepAccumulator {
-  samples: number;
+export interface RepFrameSample {
+  elbowAngle: number;
   depth: number;
   bodyLine: number;
   elbowFlare: number;
   headAlignment: number;
   framing: number;
-  hipSag: number;
-  hipPike: number;
+  hipSag: number | null;
+  hipPike: number | null;
+  hipBias: number;
   handStack: number;
-  bestOverall: number;
-  worstOverall: number;
   notes: string[];
+}
+
+export interface RepAccumulator {
+  frames: number;
+  bottomFrames: RepFrameSample[];
 }
 
 export interface SessionRep {
@@ -57,6 +63,8 @@ export interface SessionRep {
   framingScore: number;
   hipSagScore: number | null;
   hipPikeScore: number | null;
+  hipBias?: number;
+  bottomElbowAngle?: number;
   confidence: number;
   timestamp: number;
 }

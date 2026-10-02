@@ -28,7 +28,7 @@ const THEME_BUCKETS: ThemeBucket[] = [
   },
   {
     label: 'Depth',
-    cue: 'Go a little deeper.',
+    cue: 'Go a little deeper while keeping hips level.',
     patterns: [/deeper/i, /depth/i, /lower/i],
   },
   {
@@ -48,8 +48,8 @@ const THEME_BUCKETS: ThemeBucket[] = [
   },
   {
     label: 'Hip line',
-    cue: 'Keep the hips level.',
-    patterns: [/hip/i, /sag/i, /pike/i, /body line/i],
+    cue: 'Don’t pike or sag — hold one straight plank line.',
+    patterns: [/\bsag/i, /\bpik(e|ing)/i, /body line/i, /plank/i],
   },
 ];
 

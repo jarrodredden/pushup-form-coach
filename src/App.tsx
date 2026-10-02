@@ -19,7 +19,16 @@ import {
 import { buildCsv, buildNotesExport, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
-import { analyzePose, createEmptyRepAccumulator, finalizeRep, MIN_SIGNAL } from './lib/scoring';
+import { liveCoachingIssues, shortenCue, type CoachingIssueKey } from './lib/coaching';
+import {
+  addRepFrame,
+  analyzePose,
+  createEmptyRepAccumulator,
+  finalizeRep,
+  MIN_SIGNAL,
+  REP_BOTTOM_ANGLE,
+  REP_TOP_ANGLE,
+} from './lib/scoring';
 import {
   activeStepKey,
   attemptForTrialState,
@@ -60,7 +69,6 @@ const RESULTS_UPLOAD_URL =
   (import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined) ??
   'https://script.google.com/macros/s/AKfycbyE8BrKiLi13COPUOqw9oeQObcUP40lrsRkT3jHyeK_BQsMMUWHc9HjZCcF2y0o0Dqw8g/exec';
 
-type CoachingIssueKey = 'setup' | 'depth' | 'elbowFlare' | 'handStack' | 'headAlignment' | 'hips';
 type UploadState = 'idle' | 'uploading' | 'done' | 'error';
 type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
@@ -88,30 +96,6 @@ function createPoseLandmarker() {
 
 function speak(message: string) {
   playVoiceMessage(message);
-}
-
-function shortenCue(message: string) {
-  const normalized = message.trim();
-  const replacements: Array<[RegExp, string]> = [
-    [/^lower a little deeper.*$/i, 'Go a little deeper'],
-    [/^lower deeper.*$/i, 'Go a little deeper'],
-    [/^tuck the elbows in.*$/i, 'Tuck elbows in'],
-    [/^stack the hands.*$/i, 'Hands under shoulders'],
-    [/^keep the head centered.*$/i, 'Keep head centered'],
-    [/^back up or lower the phone.*$/i, 'Back up for hands and torso'],
-    [/^move back or lower the phone.*$/i, 'Back up for hands and torso'],
-    [/^keep the hips from sagging.*$/i, 'Keep hips level'],
-    [/^keep the hips level and avoid piking.*$/i, 'Keep hips level'],
-    [/^clean head-on rep.*$/i, 'Good rep'],
-    [/^clean side-view rep.*$/i, 'Good rep'],
-    [/^audio cues are unlocked.*$/i, 'Audio unlocked'],
-    [/^tap enable sound.*$/i, 'Tap Start camera and sound'],
-  ];
-  for (const [pattern, replacement] of replacements) {
-    if (pattern.test(normalized)) return replacement;
-  }
-  const words = normalized.split(/\s+/);
-  return words.length > 8 ? `${words.slice(0, 8).join(' ')}…` : normalized;
 }
 
 const repEncouragements = {
@@ -379,9 +363,9 @@ export default function App() {
   }, [athleteName, history, sessionStartedAt]);
 
   const focusLines = useMemo(() => {
-    if (workflowMode === 'coaching') return coachingFocusLines(coachingComplete ? set2Summary : set1Summary);
-    return coachingFocusLines(overallSummary);
-  }, [coachingComplete, overallSummary, set1Summary, set2Summary, workflowMode]);
+    if (workflowMode === 'coaching') return coachingFocusLines(coachingComplete ? set2Summary : set1Summary, cameraView);
+    return coachingFocusLines(overallSummary, cameraView);
+  }, [cameraView, coachingComplete, overallSummary, set1Summary, set2Summary, workflowMode]);
 
   const applyBaselineBias = (frame: PoseAnalysis): PoseAnalysis => {
     const reference = baselines.references[gradingAngleForView(frame.viewMode)];
@@ -590,11 +574,12 @@ export default function App() {
       'countdown-5',
       'lets-get-started',
       'go',
-      'go-a-little-deeper',
+      'go-a-little-deeper-while-keeping-hips-level',
+      'dont-pike-hips-down',
+      'dont-sag-squeeze-your-belly',
       'tuck-elbows-in',
       'hands-under-shoulders',
       'keep-head-centered',
-      'keep-hips-level',
       'back-up-for-hands-and-torso',
       'good-rep-a-little-more-depth-and-youre-golden',
       'nice-that-was-a-strong-one',
@@ -678,36 +663,6 @@ export default function App() {
     };
   };
 
-  const buildCoachingIssues = (frame: PoseAnalysis) => {
-    const issues: Array<{ key: CoachingIssueKey; cue: string }> = [];
-    const counting = calibrationStateRef.current === 'counting';
-    const setupCue = frame.setupHint ?? 'Move back so hands and torso stay in frame.';
-    const setupNeeded = counting
-      ? frame.confidence < 0.32 || frame.framingScore < 20
-      : frame.viewMode === 'head-on'
-        ? frame.confidence < 0.72 || frame.framingScore < 64 || frame.handStackScore < 72
-        : frame.confidence < 0.7 || frame.framingScore < 62 || frame.handStackScore < 72;
-    if (setupNeeded) {
-      issues.push({ key: 'setup', cue: setupCue });
-      return issues;
-    }
-
-    if (frame.viewMode === 'head-on') {
-      if (frame.elbowDepthScore < 55) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
-      if (frame.bodyLineScore < 74) issues.push({ key: 'hips', cue: 'Keep the hips lower and the body straighter.' });
-      if (frame.elbowFlareScore < 68) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
-      if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
-      if (frame.headAlignmentScore < 70) issues.push({ key: 'headAlignment', cue: 'Keep the head centered.' });
-      return issues;
-    }
-
-    if (frame.elbowDepthScore < 58) issues.push({ key: 'depth', cue: 'Go a little deeper.' });
-    if (frame.bodyLineScore < 74 || (frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72) issues.push({ key: 'hips', cue: 'Keep the hips level and the body straighter.' });
-    if (frame.handStackScore < 72) issues.push({ key: 'handStack', cue: 'Hands under shoulders.' });
-    if (frame.elbowFlareScore < 70) issues.push({ key: 'elbowFlare', cue: 'Tuck the elbows in.' });
-    return issues;
-  };
-
   const renderAnalysisCue = (cue: string) => {
     const shortCue = shortenCue(cue);
     const now = Date.now();
@@ -734,7 +689,7 @@ export default function App() {
 
   const updateCoachingFocus = (frame: PoseAnalysis) => {
     const now = Date.now();
-    const issues = buildCoachingIssues(frame);
+    const issues = liveCoachingIssues(frame, calibrationStateRef.current === 'counting');
     const active = coachingFocusRef.current;
     const activeIssue = active.key ? issues.find((issue) => issue.key === active.key) : null;
 
@@ -776,9 +731,11 @@ export default function App() {
   };
 
   const finishRep = (analysisFrame: PoseAnalysis) => {
-    const nextRepIndex = repCounterRef.current.next();
-    const rep = finalizeRep(repAccumulatorRef.current, analysisFrame, nextRepIndex);
+    const accumulator = repAccumulatorRef.current;
     repAccumulatorRef.current = createEmptyRepAccumulator();
+    if (!accumulator.bottomFrames.length) return;
+    const nextRepIndex = repCounterRef.current.next();
+    const rep = finalizeRep(accumulator, analysisFrame, nextRepIndex);
     if (!rep) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     if (attempt) {
@@ -823,8 +780,8 @@ export default function App() {
     if (confidence < MIN_SIGNAL) return;
 
     const state = repStateRef.current;
-    const topThreshold = 158;
-    const downThreshold = 120;
+    const topThreshold = REP_TOP_ANGLE;
+    const downThreshold = REP_BOTTOM_ANGLE;
 
     if (!state.sawTop) {
       state.topStableFrames = elbowAngle >= topThreshold ? state.topStableFrames + 1 : 0;
@@ -838,24 +795,7 @@ export default function App() {
       return;
     }
 
-    repAccumulatorRef.current = {
-      ...repAccumulatorRef.current,
-      samples: repAccumulatorRef.current.samples + 1,
-      depth: repAccumulatorRef.current.depth + frame.elbowDepthScore,
-      bodyLine: repAccumulatorRef.current.bodyLine + frame.bodyLineScore,
-      elbowFlare: repAccumulatorRef.current.elbowFlare + frame.elbowFlareScore,
-      headAlignment: repAccumulatorRef.current.headAlignment + frame.headAlignmentScore,
-      framing: repAccumulatorRef.current.framing + frame.framingScore,
-      hipSag: repAccumulatorRef.current.hipSag + (frame.hipSagScore ?? 0),
-      hipPike: repAccumulatorRef.current.hipPike + (frame.hipPikeScore ?? 0),
-      handStack: repAccumulatorRef.current.handStack + frame.handStackScore,
-      bestOverall: Math.max(repAccumulatorRef.current.bestOverall, frame.overallScore),
-      worstOverall: repAccumulatorRef.current.samples === 0 ? frame.overallScore : Math.min(repAccumulatorRef.current.worstOverall, frame.overallScore),
-      notes: [...new Set([
-        ...repAccumulatorRef.current.notes,
-        ...frame.notes.filter((note) => note !== frame.setupHint),
-      ])].slice(0, 8),
-    };
+    repAccumulatorRef.current = addRepFrame(repAccumulatorRef.current, frame, downThreshold);
 
     if (elbowAngle <= downThreshold) {
       state.bottomStableFrames += 1;
@@ -1563,7 +1503,7 @@ export default function App() {
           {phase === 'break' ? (
             <BreakPanel
               set1={set1Summary}
-              focusLines={coachingFocusLines(set1Summary)}
+              focusLines={coachingFocusLines(set1Summary, cameraView)}
               metrics={liveMetrics}
               visualsAllowed={modeAllowsVisuals}
               spokenCoaching={spokenCoachingEnabled}

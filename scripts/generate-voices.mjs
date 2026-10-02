@@ -30,6 +30,9 @@ const encouragements = {
 };
 
 const tips = [
+  'Go a little deeper while keeping hips level',
+  "Don't pike, hips down",
+  "Don't sag, squeeze your belly",
   'Go a little deeper.',
   'Tuck elbows in.',
   'Hands under shoulders.',

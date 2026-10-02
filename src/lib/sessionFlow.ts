@@ -1,3 +1,6 @@
+import { FOCUS_LINES, HIP_BIAS_MIN, rankCoachingTips } from './coaching';
+import type { CameraViewMode } from './types';
+
 export const REPS_PER_SET = 5;
 
 export type WorkflowMode = 'free' | 'coaching';
@@ -74,7 +77,11 @@ export interface RepLike {
   elbowDepthScore: number;
   bodyLineScore: number;
   elbowFlareScore: number;
+  hipBias?: number;
 }
+
+/** 'mixed' = some reps piked and others sagged; null = no usable hip direction. */
+export type SetHipDirection = 'pike' | 'sag' | 'mixed' | null;
 
 export interface SetSummary {
   count: number;
@@ -83,10 +90,29 @@ export interface SetSummary {
   depth: number;
   bodyLine: number;
   elbowFlare: number;
+  hipDirection: SetHipDirection;
+}
+
+/** One hip direction must account for at least this share of the set's hip deficit to be named. */
+const HIP_DIRECTION_SHARE = 0.7;
+
+function summarizeHipDirection(reps: RepLike[]): SetHipDirection {
+  let pike = 0;
+  let sag = 0;
+  for (const rep of reps) {
+    if (rep.hipBias === undefined || rep.hipBias === null) continue;
+    if (rep.hipBias > 0) sag += rep.hipBias;
+    else pike -= rep.hipBias;
+  }
+  const total = pike + sag;
+  if (total < HIP_BIAS_MIN) return null;
+  if (pike / total >= HIP_DIRECTION_SHARE) return 'pike';
+  if (sag / total >= HIP_DIRECTION_SHARE) return 'sag';
+  return 'mixed';
 }
 
 export function summarizeReps(reps: RepLike[]): SetSummary {
-  if (!reps.length) return { count: 0, average: 0, best: 0, depth: 0, bodyLine: 0, elbowFlare: 0 };
+  if (!reps.length) return { count: 0, average: 0, best: 0, depth: 0, bodyLine: 0, elbowFlare: 0, hipDirection: null };
   const avg = (pick: (rep: RepLike) => number) => Math.round(reps.reduce((sum, rep) => sum + pick(rep), 0) / reps.length);
   return {
     count: reps.length,
@@ -95,17 +121,34 @@ export function summarizeReps(reps: RepLike[]): SetSummary {
     depth: avg((rep) => rep.elbowDepthScore),
     bodyLine: avg((rep) => rep.bodyLineScore),
     elbowFlare: avg((rep) => rep.elbowFlareScore),
+    hipDirection: summarizeHipDirection(reps),
   };
 }
 
-export function coachingFocusLines(summary: SetSummary) {
+export const FOCUS_PASS_LINES = { depth: 70, hips: 75, elbowFlare: 72 };
+
+function hipFocusLines(direction: SetHipDirection) {
+  if (direction === 'pike') return [FOCUS_LINES.hipPike];
+  if (direction === 'sag') return [FOCUS_LINES.hipSag];
+  return [FOCUS_LINES.hipPike, FOCUS_LINES.hipSag];
+}
+
+export function coachingFocusLines(summary: SetSummary, viewMode: CameraViewMode = 'head-on') {
   if (!summary.count) return ['Finish a few reps to get personal coaching.'];
-  const lines: Array<{ gap: number; text: string }> = [];
-  if (summary.depth < 70) lines.push({ gap: 70 - summary.depth, text: 'Go lower — bend your elbows until your chest is close to the floor.' });
-  if (summary.bodyLine < 75) lines.push({ gap: 75 - summary.bodyLine, text: 'Keep a straight plank line — squeeze your belly so your hips don’t pike up or sag.' });
-  if (summary.elbowFlare < 72) lines.push({ gap: 72 - summary.elbowFlare, text: 'Tuck your elbows closer to your sides instead of flaring them out.' });
-  if (!lines.length) return ['Great form — keep the same depth and straight body line.'];
-  return lines.sort((a, b) => b.gap - a.gap).map((line) => line.text);
+  const ranked = rankCoachingTips(
+    [
+      { key: 'depth', score: summary.depth, passLine: FOCUS_PASS_LINES.depth },
+      { key: 'hips', score: summary.bodyLine, passLine: FOCUS_PASS_LINES.hips },
+      { key: 'elbowFlare', score: summary.elbowFlare, passLine: FOCUS_PASS_LINES.elbowFlare },
+    ],
+    viewMode,
+  );
+  if (!ranked.length) return [FOCUS_LINES.clean];
+  return ranked.flatMap((tip) => {
+    if (tip.key === 'hips') return hipFocusLines(summary.hipDirection);
+    if (tip.key === 'depth') return [FOCUS_LINES.depth];
+    return [FOCUS_LINES.elbowFlare];
+  });
 }
 
 export function improvementVerdict(delta: number) {

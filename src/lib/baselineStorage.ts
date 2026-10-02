@@ -140,6 +140,7 @@ export function createDefaultBaselineReference(angle: BaselineAngle): BaselinePo
       framingScore: 100,
       hipSagScore: angle === 'side' ? 100 : null,
       hipPikeScore: angle === 'side' ? 100 : null,
+      hipBias: 0,
       confidence: 1,
       phase: 'bottom',
       setupHint: null,

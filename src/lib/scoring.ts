@@ -1,6 +1,12 @@
-import { CameraViewMode, PoseAnalysis, PosePoint, RepAccumulator, SessionRep } from './types';
+import { hipDirection, LIVE_CUES, weightedRepScore } from './coaching';
+import { CameraViewMode, PoseAnalysis, PosePoint, RepAccumulator, RepFrameSample, SessionRep } from './types';
 
 export const MIN_SIGNAL = 0.45;
+export const REP_TOP_ANGLE = 158;
+export const REP_BOTTOM_ANGLE = 120;
+/** Frames within this many degrees of the rep's deepest elbow angle form the scored bottom window. */
+export const BOTTOM_WINDOW_DEGREES = 12;
+const MAX_BOTTOM_FRAMES = 240;
 
 const REQUIRED = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28] as const;
 const LEFT = { shoulder: 11, elbow: 13, wrist: 15, hip: 23, knee: 25, ankle: 27 };
@@ -40,13 +46,18 @@ function buildHeadOnNotes(metrics: {
   handStackScore: number;
   headAlignmentScore: number;
   framingScore: number;
+  hipBias: number;
   setupHint: string | null;
 }) {
   const notes: string[] = [];
   if (metrics.setupHint) notes.push(metrics.setupHint);
   // Front-view coaching is intentionally softer so depth and flare stay achievable on a phone camera.
-  if (metrics.elbowDepthScore < 55) notes.push('Lower a little deeper at the bottom of the rep.');
-  if (metrics.bodyLineScore < 74) notes.push('Keep the hips lower and the body straighter.');
+  if (metrics.elbowDepthScore < 55) notes.push(LIVE_CUES.depth);
+  if (metrics.bodyLineScore < 74) {
+    const direction = hipDirection(metrics.hipBias);
+    if (direction !== 'sag') notes.push(LIVE_CUES.hipPike);
+    if (direction !== 'pike') notes.push(LIVE_CUES.hipSag);
+  }
   if (metrics.elbowFlareScore < 68) notes.push('Tuck the elbows in a bit more from the front view.');
   if (metrics.handStackScore < 74) notes.push('Stack the hands under the shoulders.');
   if (metrics.headAlignmentScore < 72) notes.push('Keep the head centered between the shoulders.');
@@ -66,10 +77,9 @@ function buildSideNotes(metrics: {
 }) {
   const notes: string[] = [];
   if (metrics.setupHint) notes.push(metrics.setupHint);
-  if (metrics.elbowDepthScore < 58) notes.push('Lower a bit deeper.');
-  if (metrics.bodyLineScore < 74) notes.push('Keep the body in a straighter plank line.');
-  if ((metrics.hipSagScore ?? 100) < 74) notes.push('Keep the hips from sagging.');
-  if ((metrics.hipPikeScore ?? 100) < 74) notes.push('Keep the hips level and avoid piking.');
+  if (metrics.elbowDepthScore < 58) notes.push(LIVE_CUES.depth);
+  if ((metrics.hipSagScore ?? 100) < 74) notes.push(LIVE_CUES.hipSag);
+  if ((metrics.hipPikeScore ?? 100) < 74) notes.push(LIVE_CUES.hipPike);
   if (metrics.handStackScore < 74) notes.push('Keep hands stacked under the shoulders.');
   if (metrics.elbowFlareScore < 74) notes.push('Tuck the elbows a little more.');
   if (!notes.length) notes.push('Clean side-view rep.');
@@ -111,6 +121,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       framingScore: 0,
       hipSagScore: null,
       hipPikeScore: null,
+      hipBias: 0,
       confidence,
       phase: 'unknown',
       setupHint,
@@ -154,8 +165,11 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     : 55;
   const framingHintText = framingHint(landmarks, viewMode);
   const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
+  // Head-on proxy: hips sit about 1.4 shoulder-widths below the shoulders in the image.
+  // Hips lower than that read as sagging, higher as piking.
+  const headOnHipDeviation = (hipMid.y - shoulderMid.y) - shoulderWidth * 1.4;
   const bodyLineProxyScore = clamp(
-    100 - Math.abs((hipMid.y - shoulderMid.y) - shoulderWidth * 1.4) / Math.max(shoulderWidth * 0.7, 0.02) * 100,
+    100 - Math.abs(headOnHipDeviation) / Math.max(shoulderWidth * 0.7, 0.02) * 100,
     0,
     100,
   );
@@ -170,6 +184,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   let hipSagScore: number | null = null;
   let hipPikeScore: number | null = null;
   let bodyLineScore = 0;
+  let hipBias = 0;
   let overallScore = 0;
   let notes: string[] = [];
 
@@ -179,12 +194,14 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     hipSagScore = clamp(100 - Math.max(0, hipDeviation / torsoLength) * 240, 0, 100);
     hipPikeScore = clamp(100 - Math.max(0, -hipDeviation / torsoLength) * 240, 0, 100);
     bodyLineScore = Math.round(((hipSagScore ?? 0) + (hipPikeScore ?? 0)) / 2);
-    overallScore = Math.round(
-      elbowDepthScore * 0.56 +
-        bodyLineScore * 0.28 +
-        handStackScore * 0.1 +
-        elbowFlareScore * 0.06,
-    );
+    hipBias = Math.round((100 - hipSagScore) - (100 - hipPikeScore));
+    overallScore = weightedRepScore('side', {
+      depth: elbowDepthScore,
+      bodyLine: bodyLineScore,
+      elbowFlare: elbowFlareScore,
+      handStack: handStackScore,
+      headAlignment: headAlignmentScore,
+    });
     notes = buildSideNotes({
       elbowDepthScore: Math.round(elbowDepthScore),
       bodyLineScore,
@@ -196,6 +213,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     });
   } else {
     bodyLineScore = Math.round(bodyLineProxyScore);
+    hipBias = Math.round(Math.sign(headOnHipDeviation) * (100 - bodyLineProxyScore));
     const headOnFrameScore = clamp(
       averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 40 +
         averageVisibility(landmarks, [LEFT.shoulder, RIGHT.shoulder]) * 35 +
@@ -203,13 +221,13 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       0,
       100,
     );
-    overallScore = Math.round(
-      elbowDepthScore * 0.55 +
-        bodyLineScore * 0.24 +
-        elbowFlareScore * 0.09 +
-        handStackScore * 0.07 +
-        headAlignmentScore * 0.05,
-    );
+    overallScore = weightedRepScore('head-on', {
+      depth: elbowDepthScore,
+      bodyLine: bodyLineScore,
+      elbowFlare: elbowFlareScore,
+      handStack: handStackScore,
+      headAlignment: headAlignmentScore,
+    });
     notes = buildHeadOnNotes({
       elbowDepthScore: Math.round(elbowDepthScore),
       bodyLineScore,
@@ -217,6 +235,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       handStackScore: Math.round(handStackScore),
       headAlignmentScore: Math.round(headAlignmentScore),
       framingScore: Math.round(headOnFrameScore),
+      hipBias,
       setupHint: framingHintText,
     });
     return {
@@ -231,6 +250,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       framingScore: Math.round(headOnFrameScore),
       hipSagScore,
       hipPikeScore,
+      hipBias,
       confidence: clamp(confidence, 0, 1),
       phase,
       setupHint: framingHintText,
@@ -250,6 +270,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     framingScore,
     hipSagScore,
     hipPikeScore,
+    hipBias,
     confidence: clamp(confidence, 0, 1),
     phase,
     setupHint: framingHintText,
@@ -258,54 +279,75 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
 }
 
 export function createEmptyRepAccumulator(): RepAccumulator {
+  return { frames: 0, bottomFrames: [] };
+}
+
+function sampleFromFrame(frame: PoseAnalysis): RepFrameSample {
   return {
-    samples: 0,
-    depth: 0,
-    bodyLine: 0,
-    elbowFlare: 0,
-    headAlignment: 0,
-    framing: 0,
-    hipSag: 0,
-    hipPike: 0,
-    handStack: 0,
-    bestOverall: 0,
-    worstOverall: 100,
-    notes: [],
+    elbowAngle: frame.elbowAngle,
+    depth: frame.elbowDepthScore,
+    bodyLine: frame.bodyLineScore,
+    elbowFlare: frame.elbowFlareScore,
+    headAlignment: frame.headAlignmentScore,
+    framing: frame.framingScore,
+    hipSag: frame.hipSagScore,
+    hipPike: frame.hipPikeScore,
+    hipBias: frame.hipBias,
+    handStack: frame.handStackScore,
+    notes: frame.notes.filter((note) => note !== frame.setupHint),
   };
 }
 
-export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number): SessionRep | null {
-  if (!accumulator.samples) return null;
-  const depth = accumulator.depth / accumulator.samples;
-  const bodyLine = accumulator.bodyLine / accumulator.samples;
-  const elbowFlare = accumulator.elbowFlare / accumulator.samples;
-  const headAlignment = accumulator.headAlignment / accumulator.samples;
-  const framing = accumulator.framing / accumulator.samples;
-  const hipSag = accumulator.hipSag / accumulator.samples;
-  const hipPike = accumulator.hipPike / accumulator.samples;
-  const handStack = accumulator.handStack / accumulator.samples;
-  const analysisNotes = analysis.setupHint
-    ? analysis.notes.filter((note) => note !== analysis.setupHint)
-    : analysis.notes;
+/**
+ * Records one post-top frame. Only frames at the bottom of the rep (elbow at or past the
+ * down threshold) are kept for scoring, so slow descents and lockouts don't dilute the rep.
+ */
+export function addRepFrame(accumulator: RepAccumulator, frame: PoseAnalysis, bottomAngle = REP_BOTTOM_ANGLE): RepAccumulator {
+  const frames = accumulator.frames + 1;
+  if (frame.elbowAngle > bottomAngle) return { ...accumulator, frames };
+  let bottomFrames = [...accumulator.bottomFrames, sampleFromFrame(frame)];
+  if (bottomFrames.length > MAX_BOTTOM_FRAMES) {
+    const shallowest = bottomFrames.reduce((worst, sample, index) => (sample.elbowAngle > bottomFrames[worst].elbowAngle ? index : worst), 0);
+    bottomFrames = bottomFrames.filter((_, index) => index !== shallowest);
+  }
+  return { frames, bottomFrames };
+}
 
-  const score =
-    analysis.viewMode === 'side'
-      ? Math.round(depth * 0.56 + bodyLine * 0.28 + handStack * 0.1 + elbowFlare * 0.06)
-      : Math.round(depth * 0.55 + bodyLine * 0.24 + elbowFlare * 0.09 + handStack * 0.07 + headAlignment * 0.05);
+const average = (values: number[]) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0);
+
+/** Scores the rep from the bottom window: frames within BOTTOM_WINDOW_DEGREES of the deepest elbow angle. */
+export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number): SessionRep | null {
+  if (!accumulator.bottomFrames.length) return null;
+  const deepest = Math.min(...accumulator.bottomFrames.map((sample) => sample.elbowAngle));
+  const window = accumulator.bottomFrames.filter((sample) => sample.elbowAngle <= deepest + BOTTOM_WINDOW_DEGREES);
+  const pick = (select: (sample: RepFrameSample) => number) => average(window.map(select));
+  const pickNullable = (select: (sample: RepFrameSample) => number | null) => {
+    const values = window.map(select).filter((value): value is number => value !== null);
+    return values.length ? Math.round(average(values)) : null;
+  };
+
+  const depth = pick((sample) => sample.depth);
+  const bodyLine = pick((sample) => sample.bodyLine);
+  const elbowFlare = pick((sample) => sample.elbowFlare);
+  const headAlignment = pick((sample) => sample.headAlignment);
+  const handStack = pick((sample) => sample.handStack);
+  const score = weightedRepScore(analysis.viewMode, { depth, bodyLine, elbowFlare, handStack, headAlignment });
 
   return {
     index,
     viewMode: analysis.viewMode,
     score,
-    notes: [...new Set([...accumulator.notes, ...analysisNotes])].slice(0, 6),
+    notes: [...new Set(window.flatMap((sample) => sample.notes))].slice(0, 6),
     elbowDepthScore: Math.round(depth),
-    bodyLineScore: Math.round(bodyLine || analysis.bodyLineScore),
+    bodyLineScore: Math.round(bodyLine),
     elbowFlareScore: Math.round(elbowFlare),
     handStackScore: Math.round(handStack),
     headAlignmentScore: Math.round(headAlignment),
-    framingScore: Math.round(framing),
-    hipSagScore: analysis.viewMode === 'side' ? Math.round(hipSag) : null,
-    hipPikeScore: analysis.viewMode === 'side' ? Math.round(hipPike) : null,
+    framingScore: Math.round(pick((sample) => sample.framing)),
+    hipSagScore: analysis.viewMode === 'side' ? pickNullable((sample) => sample.hipSag) : null,
+    hipPikeScore: analysis.viewMode === 'side' ? pickNullable((sample) => sample.hipPike) : null,
+    hipBias: Math.round(pick((sample) => sample.hipBias)),
+    bottomElbowAngle: Math.round(deepest),
     confidence: analysis.confidence,
     timestamp: Date.now(),
   };

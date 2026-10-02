@@ -30,10 +30,13 @@ How grading uses it: every metric is a 0–100 form score. A rep scoring at or a
 ## Scoring model
 
 - **Elbow depth** — how far the elbows bend (100 ≈ 85° at the bottom).
-- **Plank line** — shoulders, hips, and ankles in one line. Side view measures hip sag and hip pike (butt up) directly; Head-on uses a hip-height proxy.
+- **Plank line** — shoulders, hips, and ankles in one line. Side view measures hip sag and hip pike (butt up) directly; Head-on uses a hip-height proxy (hips lower than expected in the image read as sag, higher as pike).
 - **Elbow tuck**, **hands under shoulders**, and **head position** fill out the rest.
-- The rep score is weighted mostly toward depth and plank line.
+- The rep score is weighted mostly toward depth and plank line (Head-on: depth 55%, plank 24%, elbows 9%, hands 7%, head 5%; Side: depth 56%, plank 28%, hands 10%, elbows 6%).
+- **Each rep is scored at the bottom only.** Frames count once the elbows bend to 120° or less, and the score averages the frames within 12° of that rep's deepest point. The descent, the push back up, and the lockout don't dilute the score, so a slow, controlled rep scores the same as a quick one with the same bottom position.
 - Rep counting is separate from form: any real top → bottom → top cycle counts; form only changes the score.
+
+**Coaching tips** (live cues and the Coach-step list) are ranked by expected overall-score gain: the metric's weight × its gap to 100, minus the expected loss on metrics the change tends to hurt. Going deeper tends to make a weak plank sag and weak elbows flare, so depth isn't pushed first when the plank or elbows are much weaker. Hip tips are directional: **Don't pike** (hips high) or **Don't sag** (hips low), never a vague "hips lower". Depth is phrased as "a little deeper while keeping hips level". The logic lives in `src/lib/coaching.ts`.
 
 ## Feedback modes (the experiment)
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FOCUS_LINES } from './coaching';
 import { activeStepKey, attemptForTrialState, coachingFocusLines, deriveJourneyPhase, REPS_PER_SET, summarizeReps, trialStateAfterRep } from './sessionFlow';
 
 const base = {
@@ -40,15 +41,40 @@ describe('coaching session flow', () => {
     expect(deriveJourneyPhase({ ...base, workflowMode: 'free', trialState: 'idle', cameraStatus: 'idle', hasResults: true })).toBe('results');
   });
 
-  it('summarizes a set and puts the biggest form gap first', () => {
+  it('summarizes a set and leads with the biggest expected score gain', () => {
     const summary = summarizeReps([
-      { score: 60, elbowDepthScore: 40, bodyLineScore: 70, elbowFlareScore: 90 },
-      { score: 70, elbowDepthScore: 50, bodyLineScore: 72, elbowFlareScore: 90 },
+      { score: 60, elbowDepthScore: 40, bodyLineScore: 70, elbowFlareScore: 90, hipBias: -30 },
+      { score: 70, elbowDepthScore: 50, bodyLineScore: 72, elbowFlareScore: 90, hipBias: -28 },
     ]);
-    expect(summary).toMatchObject({ count: 2, average: 65, best: 70, depth: 45 });
+    expect(summary).toMatchObject({ count: 2, average: 65, best: 70, depth: 45, hipDirection: 'pike' });
     const lines = coachingFocusLines(summary);
-    expect(lines[0]).toMatch(/lower/i);
+    expect(lines[0]).toBe(FOCUS_LINES.depth);
+    expect(lines[0]).toMatch(/a little deeper while keeping hips level/i);
+    expect(lines[1]).toBe(FOCUS_LINES.hipPike);
     expect(lines).toHaveLength(2);
+  });
+
+  it('leads with the plank instead of depth when the body line is much weaker', () => {
+    const summary = summarizeReps([
+      { score: 50, elbowDepthScore: 60, bodyLineScore: 35, elbowFlareScore: 90, hipBias: 60 },
+      { score: 52, elbowDepthScore: 62, bodyLineScore: 39, elbowFlareScore: 90, hipBias: 55 },
+    ]);
+    const lines = coachingFocusLines(summary);
+    expect(lines[0]).toBe(FOCUS_LINES.hipSag);
+    expect(lines[1]).toBe(FOCUS_LINES.depth);
+  });
+
+  it('splits hip coaching into separate pike and sag tips', () => {
+    const base = { score: 60, elbowDepthScore: 95, elbowFlareScore: 95 };
+    expect(coachingFocusLines(summarizeReps([{ ...base, bodyLineScore: 50, hipBias: 50 }]))).toEqual([FOCUS_LINES.hipSag]);
+    expect(coachingFocusLines(summarizeReps([{ ...base, bodyLineScore: 50, hipBias: -50 }]))).toEqual([FOCUS_LINES.hipPike]);
+    const mixed = summarizeReps([
+      { ...base, bodyLineScore: 50, hipBias: 50 },
+      { ...base, bodyLineScore: 50, hipBias: -50 },
+    ]);
+    expect(mixed.hipDirection).toBe('mixed');
+    expect(coachingFocusLines(mixed)).toEqual([FOCUS_LINES.hipPike, FOCUS_LINES.hipSag]);
+    expect(coachingFocusLines(mixed).join(' ')).not.toMatch(/hips lower/i);
   });
 
   it('highlights the right step in the progress indicator', () => {
