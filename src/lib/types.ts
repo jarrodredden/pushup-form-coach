@@ -83,6 +83,8 @@ export interface SessionRep {
   elbowAbduction?: number;
   /** Feedback the volunteer received while doing this rep. */
   feedbackMode?: FeedbackMode;
+  /** Real-time Up/Down tempo cues were playing during this rep. */
+  tempoCues?: boolean;
   confidence: number;
   timestamp: number;
 }

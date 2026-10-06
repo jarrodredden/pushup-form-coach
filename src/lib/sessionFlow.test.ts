@@ -6,6 +6,8 @@ import {
   coachingFocusLines,
   deriveJourneyPhase,
   feedbackModeFor,
+  tempoCuesFor,
+  tempoCuesLabel,
   formatRestClock,
   journeySteps,
   spokenTipsFor,
@@ -147,5 +149,24 @@ describe('volunteer feedback protocol', () => {
     expect(feedbackModeFor('visual', 'coaching', 'attempt-1')).toBe('visual');
     expect(feedbackModeFor('visual', 'coaching', 'attempt-2')).toBe('visual');
     expect(spokenTipsFor('audio', 'audio', false)).toBe(false);
+  });
+});
+
+describe('tempo cues protocol', () => {
+  it('only runs in audio modes: set 2 of the volunteer protocol, never the set 1 control or visual-only', () => {
+    const mode = (state: Parameters<typeof feedbackModeFor>[2]) => feedbackModeFor('study', 'coaching', state);
+    expect(tempoCuesFor(mode('attempt-1'), true)).toBe(false);
+    expect(tempoCuesFor(mode('attempt-2'), true)).toBe(true);
+    expect(tempoCuesFor('visual', true)).toBe(false);
+    expect(tempoCuesFor('control', true)).toBe(false);
+    expect(tempoCuesFor('audio', true)).toBe(true);
+    expect(tempoCuesFor('combined', false)).toBe(false);
+  });
+
+  it('labels which sets heard them', () => {
+    expect(tempoCuesLabel([{ attempt: 1 }, { attempt: 2, tempoCues: true }])).toBe('set2');
+    expect(tempoCuesLabel([{ attempt: 1, tempoCues: true }, { attempt: 2, tempoCues: true }])).toBe('set1+set2');
+    expect(tempoCuesLabel([{ tempoCues: true }])).toBe('on');
+    expect(tempoCuesLabel([{ attempt: 1 }, { attempt: 2 }])).toBe('off');
   });
 });

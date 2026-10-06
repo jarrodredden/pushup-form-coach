@@ -15,6 +15,7 @@ const RESULT_COLUMNS = [
   'set1_feedback',
   'set2_feedback',
   'camera_view',
+  'tempo_cues',
 ];
 
 // Writes by header name. Columns missing from an existing sheet are added at the right, so older

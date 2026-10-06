@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildNotesExport } from './export';
+import { buildNotesExport, tempoCuesText } from './export';
 import { SessionRep } from './types';
 
 describe('notes export', () => {
@@ -48,5 +48,13 @@ describe('notes export', () => {
     expect(notes).toContain('Depth');
     expect(notes).not.toMatch(/feet/i);
     expect(notes).not.toContain('rep_index');
+  });
+});
+
+describe('tempo cue notes', () => {
+  it('spells out which sets had tempo cues', () => {
+    expect(tempoCuesText('set2')).toBe('on for set 2');
+    expect(tempoCuesText('set1+set2')).toBe('on for set 1 and set 2');
+    expect(tempoCuesText('off')).toBe('off');
   });
 });

@@ -20,6 +20,8 @@ interface SetupPanelProps {
   onFeedbackSettingChange: (setting: FeedbackSetting) => void;
   spokenCoaching: boolean;
   onSpokenCoachingChange: (value: boolean) => void;
+  tempoCues: boolean;
+  onTempoCuesChange: (value: boolean) => void;
   cameraFacing: CameraFacing;
   onCameraFacingChange: (value: CameraFacing) => void;
   cameraView: CameraViewMode;
@@ -87,6 +89,30 @@ export function SpokenTipsSwitch({ checked, onChange, disabled }: { checked: boo
       <span className="switch-row__text">
         <strong>Spoken form tips</strong>
         <span>{disabled ? 'Needs Audio or Combined mode.' : 'Live-coach voice for depth, plank line, and elbows.'}</span>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        className="switch"
+        checked={checked && !disabled}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
+export function TempoCuesSwitch({ checked, onChange, disabled }: { checked: boolean; onChange: (value: boolean) => void; disabled: boolean }) {
+  return (
+    <label className={disabled ? 'switch-row is-disabled' : 'switch-row'}>
+      <span className="switch-row__icon"><SpeakerIcon /></span>
+      <span className="switch-row__text">
+        <strong>Up / Down tempo cues</strong>
+        <span>
+          {disabled
+            ? 'Needs Audio or Combined mode.'
+            : 'Real-time “Down” at lockout and “Up” at full depth, in audio modes only (set 2 in the volunteer protocol).'}
+        </span>
       </span>
       <input
         type="checkbox"
@@ -200,6 +226,11 @@ export function SetupPanel(props: SetupPanelProps) {
           {props.feedbackSetting !== 'study' ? (
             <SpokenTipsSwitch checked={props.spokenCoaching} onChange={props.onSpokenCoachingChange} disabled={!audioAllowed} />
           ) : null}
+          <TempoCuesSwitch
+            checked={props.tempoCues}
+            onChange={props.onTempoCuesChange}
+            disabled={props.feedbackSetting !== 'study' && !audioAllowed}
+          />
         </section>
       ) : null}
 

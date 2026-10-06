@@ -46,6 +46,19 @@ export function spokenTipsFor(setting: FeedbackSetting, mode: FeedbackMode, admi
   return adminSwitch;
 }
 
+/** Real-time Up/Down cues only run in modes with audio (so never in the set 1 control). */
+export function tempoCuesFor(mode: FeedbackMode, enabled: boolean) {
+  return enabled && (mode === 'audio' || mode === 'combined');
+}
+
+/** Which sets actually heard tempo cues, for the results sheet: "set2", "set1+set2", "on" (practice), or "off". */
+export function tempoCuesLabel(reps: Array<{ attempt?: number; tempoCues?: boolean }>) {
+  const cued = reps.filter((rep) => rep.tempoCues);
+  if (!cued.length) return 'off';
+  const sets = [...new Set(cued.map((rep) => rep.attempt ?? 0))].filter(Boolean).sort();
+  return sets.length ? sets.map((set) => `set${set}`).join('+') : 'on';
+}
+
 export function attemptForTrialState(state: CoachingTrialState): 0 | 1 | 2 {
   if (state === 'attempt-1') return 1;
   if (state === 'attempt-2') return 2;

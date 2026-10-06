@@ -6,6 +6,8 @@ export interface NotesExportSummary {
   mode: FeedbackMode;
   cameraView: CameraViewMode;
   spokenCoachingEnabled: boolean;
+  /** tempoCuesLabel(): which sets had the Up/Down tempo cues. */
+  tempoCues?: string;
   reps: number;
   averageScore: number;
   bestScore: number;
@@ -86,7 +88,7 @@ export function buildCsv(summary: SessionSummary, reps: SessionRep[], logs: LogE
       summary.notes.length,
     ].join(','),
     '',
-    ['rep_index', 'view_mode', 'score', 'elbow_depth', 'body_line', 'elbow_flare', 'hip_sag', 'hip_pike', 'hand_stack', 'head_alignment', 'framing', 'confidence', 'notes', 'set', 'plank_method', 'plank_raw', 'elbow_abduction_deg'].join(','),
+    ['rep_index', 'view_mode', 'score', 'elbow_depth', 'body_line', 'elbow_flare', 'hip_sag', 'hip_pike', 'hand_stack', 'head_alignment', 'framing', 'confidence', 'notes', 'set', 'plank_method', 'plank_raw', 'elbow_abduction_deg', 'tempo_cues'].join(','),
     ...[...reps].sort((a, b) => a.index - b.index).map((rep) => [
       rep.index,
       rep.viewMode,
@@ -105,6 +107,7 @@ export function buildCsv(summary: SessionSummary, reps: SessionRep[], logs: LogE
       rep.plankMethod ?? 'n/a',
       rep.plankRaw ?? '',
       rep.elbowAbduction ?? '',
+      rep.tempoCues ? 'on' : 'off',
     ].join(',')),
     '',
     ['log_time', 'kind', 'message', 'details'].join(','),
@@ -131,6 +134,12 @@ function collectThemeBuckets(notes: string[]) {
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
+/** "set2" → "on for set 2", "set1+set2" → "on for set 1 and set 2". */
+export function tempoCuesText(label: string) {
+  if (label === 'off' || label === 'on') return label;
+  return `on for ${label.replace(/set(\d)/g, 'set $1').replace('+', ' and ')}`;
+}
+
 export function buildNotesExport(summary: NotesExportSummary, reps: SessionRep[]) {
   const themes = collectThemeBuckets([...summary.notes, ...reps.flatMap((rep) => rep.notes)]).slice(0, 3);
   const dateLabel = new Date(summary.dateIso).toLocaleString();
@@ -148,6 +157,7 @@ export function buildNotesExport(summary: NotesExportSummary, reps: SessionRep[]
     `Mode: ${summary.mode}`,
     `View: ${summary.cameraView}`,
     `Spoken coaching: ${summary.spokenCoachingEnabled ? 'on' : 'off'}`,
+    ...(summary.tempoCues ? [`Up/Down tempo cues: ${tempoCuesText(summary.tempoCues)}`] : []),
     `Total reps: ${summary.reps}`,
     `Average score: ${summary.averageScore}/100`,
     `Best score: ${summary.bestScore}/100`,

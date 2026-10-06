@@ -71,6 +71,8 @@ import {
   deriveJourneyPhase,
   feedbackModeFor,
   spokenTipsFor,
+  tempoCuesFor,
+  tempoCuesLabel,
   type FeedbackSetting,
   formatRestClock,
   journeySteps,
@@ -85,7 +87,9 @@ import {
 } from './lib/sessionFlow';
 import { isOfflinePackage, loadPoseAssets } from './lib/poseAssets';
 import { loadHistory, saveHistory } from './lib/storage';
-import { playVoiceClip, playVoiceMessage, preloadVoiceClips, resolveVoiceClipNames } from './lib/voiceAudio';
+import { clearVoiceQueue, duckVoice, holdVoiceQueue, playVoiceClip, voiceQueueIdle, playVoiceMessage, preloadVoiceClips, resolveVoiceClipNames } from './lib/voiceAudio';
+import { createTempoState, stepTempo, summarizeLatency, type TempoCue, type TempoLatency } from './lib/tempoCues';
+import { audioOutputLatencyMs, loadTempoCues, playTempoCue, tempoCuesReady } from './lib/tempoAudio';
 import type {
   BaselineAngle,
   BaselinePoseReference,
@@ -145,8 +149,17 @@ function speak(message: string) {
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextCtor) return false;
+  // iOS mutes Web Audio with the ringer switch by default; the voice clips (media elements) ignore it.
+  const audioSession = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+  if (audioSession && audioSession.type !== 'playback') {
+    try {
+      audioSession.type = 'playback';
+    } catch {
+      // Older WebKit: leave the default session.
+    }
+  }
   if (!contextRef.current) {
-    contextRef.current = new AudioContextCtor();
+    contextRef.current = new AudioContextCtor({ latencyHint: 'interactive' });
   }
   if (contextRef.current.state === 'suspended') {
     await contextRef.current.resume();
@@ -231,6 +244,11 @@ export default function App() {
   const cueLastEmittedAtRef = useRef(0);
   const cueHoldUntilRef = useRef(0);
   const repSpeechLockUntilRef = useRef(0);
+  const tempoStateRef = useRef(createTempoState(0));
+  const tempoLatencyRef = useRef<TempoLatency[]>([]);
+  const tempoUnavailableLoggedRef = useRef(false);
+  /** performance.now() around the latest detectForVideo call, for tempo-cue latency. */
+  const frameTimingRef = useRef({ detectStartedAt: 0, resultAt: 0 });
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
@@ -245,6 +263,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
   const [spokenTipsSwitch, setSpokenTipsSwitch] = useState(true);
+  const [tempoCuesSwitch, setTempoCuesSwitch] = useState(true);
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('coaching');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
@@ -299,6 +318,10 @@ export default function App() {
   const spokenCoachingEnabled = spokenTipsFor(feedbackSetting, feedbackMode, spokenTipsSwitch);
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
+  const tempoCuesSwitchRef = useRef(tempoCuesSwitch);
+  useEffect(() => {
+    tempoCuesSwitchRef.current = tempoCuesSwitch;
+  }, [tempoCuesSwitch]);
   const gradingAngle = gradingAngleForView(cameraView);
   const feedbackModeRef = useRef(feedbackMode);
   const audioUnlockedRef = useRef(audioUnlocked);
@@ -320,6 +343,7 @@ export default function App() {
     if (adminUnlocked) return;
     setFeedbackSetting('study');
     setCameraView('head-on');
+    setTempoCuesSwitch(true);
   }, [adminUnlocked]);
   useEffect(() => {
     audioUnlockedRef.current = audioUnlocked;
@@ -614,6 +638,9 @@ export default function App() {
     let countdown = 5;
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     const canSpeakCountdown = currentModeAllowsAudio && audioUnlockedRef.current;
+    if (canSpeakCountdown) {
+      clearVoiceQueue();
+    }
     if (canSpeakCountdown && announce) {
       speak('Calibration complete');
     }
@@ -646,6 +673,8 @@ export default function App() {
         activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
         repStateRef.current = freshRepState();
         repAccumulatorRef.current = createEmptyRepAccumulator();
+        tempoStateRef.current = createTempoState(performance.now());
+        tempoLatencyRef.current = [];
         pushLog('info', 'Countdown finished. Counting started.');
         setCurrentCue('Go!');
         goOverlayTimerRef.current = window.setTimeout(() => {
@@ -704,6 +733,12 @@ export default function App() {
     setAudioUnlocked(true);
     localStorage.setItem(SOUND_WANTED_KEY, '1');
     const unlocked = await unlockAudioContext(audioContextRef);
+    if (unlocked && audioContextRef.current) {
+      const context = audioContextRef.current;
+      void loadTempoCues(context).then((ready) =>
+        pushLog('info', ready ? `Tempo cues ready (audio output latency ≈ ${Math.round(audioOutputLatencyMs(context))} ms).` : 'Tempo cues could not be decoded.'),
+      );
+    }
     if (unlocked && modeAllowsAudio) {
       pushLog('info', 'Sound unlocked.');
       if (audioContextRef.current) {
@@ -873,6 +908,7 @@ export default function App() {
     if (!rep) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     rep.feedbackMode = feedbackModeRef.current;
+    rep.tempoCues = tempoCuesActive();
     if (attempt) {
       rep.attempt = attempt;
       attemptRepCountRef.current[attempt] += 1;
@@ -912,6 +948,7 @@ export default function App() {
     }
 
     if (!attempt || !setFinished) return;
+    logTempoSummary(`set ${attempt}`);
     setTrialState(nextTrialState);
     setPaused(true);
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
@@ -938,11 +975,71 @@ export default function App() {
     }
   };
 
+  const tempoCuesActive = () => tempoCuesFor(feedbackModeRef.current, tempoCuesSwitchRef.current) && audioUnlockedRef.current;
+
+  /** Real-time Up/Down: played straight from the pose frame that crosses the threshold, no queue. */
+  const stepTempoCues = (frame: PoseAnalysis) => {
+    if (!tempoCuesActive()) return;
+    const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
+    // A rep that reached the bottom completes at this lockout; if it's the set's last, no Down follows.
+    const repsAfterThisTop = attempt ? attemptRepCountRef.current[attempt] + (repStateRef.current.sawBottom ? 1 : 0) : 0;
+    const step = stepTempo(tempoStateRef.current, {
+      elbowAngle: frame.elbowAngle,
+      depthScore: frame.elbowDepthScore,
+      now: performance.now(),
+      allowDown: !attempt || repsAfterThisTop < REPS_PER_SET,
+      speechBusy: !voiceQueueIdle(),
+    });
+    tempoStateRef.current = step.state;
+    if (!step.cue) return;
+    const context = audioContextRef.current;
+    const durationMs = context ? playTempoCue(context, step.cue) : null;
+    const startedAt = performance.now();
+    if (!context || durationMs === null) {
+      if (!tempoUnavailableLoggedRef.current) {
+        tempoUnavailableLoggedRef.current = true;
+        pushLog('info', `Tempo cue skipped: ${tempoCuesReady(context) ? 'audio context not running' : 'clips not decoded yet'}.`);
+      }
+      return;
+    }
+    // Coaching lines wait for the gap after the cue; one already playing is ducked under it.
+    duckVoice(durationMs + 150);
+    holdVoiceQueue(durationMs + 120);
+    const timing = frameTimingRef.current;
+    const sample: TempoLatency = {
+      cue: step.cue,
+      poseToStartMs: startedAt - timing.resultAt,
+      inferenceMs: timing.resultAt - timing.detectStartedAt,
+      outputMs: audioOutputLatencyMs(context),
+    };
+    tempoLatencyRef.current.push(sample);
+    logTempoCue(step.cue, sample);
+  };
+
+  const logTempoCue = (cue: TempoCue, sample: TempoLatency) => {
+    pushLog(
+      'cue',
+      `Tempo “${cue === 'up' ? 'Up' : 'Down'}”`,
+      `pose → play ${sample.poseToStartMs.toFixed(1)} ms + audio output ${Math.round(sample.outputMs)} ms (pose inference ${Math.round(sample.inferenceMs)} ms)`,
+    );
+  };
+
+  const logTempoSummary = (label: string) => {
+    const summary = summarizeLatency(tempoLatencyRef.current);
+    tempoLatencyRef.current = [];
+    if (!summary) return;
+    pushLog(
+      'info',
+      `Tempo cues ${label}: ${summary.count} played, pose → sound median ${summary.medianMs} ms, max ${summary.maxMs} ms (+ pose inference ~${summary.medianInferenceMs} ms).`,
+    );
+  };
+
   const updateRepState = (frame: PoseAnalysis) => {
     if (calibrationStateRef.current !== 'counting') return;
     const { elbowAngle, confidence } = frame;
     const now = Date.now();
     if (confidence < MIN_SIGNAL) return;
+    stepTempoCues(frame);
 
     const state = repStateRef.current;
     const topThreshold = REP_TOP_ANGLE;
@@ -1236,7 +1333,9 @@ export default function App() {
         if (!runningRef.current || !poseRef.current || !videoRef.current) return;
         const videoEl = videoRef.current;
         if (videoEl.readyState >= 2) {
-          const result = poseRef.current.detectForVideo(videoEl, performance.now());
+          const detectStartedAt = performance.now();
+          const result = poseRef.current.detectForVideo(videoEl, detectStartedAt);
+          frameTimingRef.current = { detectStartedAt, resultAt: performance.now() };
           frameHandlerRef.current(result.landmarks[0] as PosePoint[] | undefined, result.worldLandmarks?.[0] as PosePoint[] | undefined);
         }
         rafRef.current = requestAnimationFrame(loop);
@@ -1289,6 +1388,7 @@ export default function App() {
   };
 
   const stopSession = () => {
+    logTempoSummary('this session');
     stopCamera();
     setCameraStatus('idle');
     pushLog('system', 'Session stopped.');
@@ -1343,7 +1443,8 @@ export default function App() {
     const set1Feedback = coaching ? setFeedback(set1Reps, 'attempt-1') : setFeedback(orderedReps, 'idle');
     const set2Feedback = coaching ? setFeedback(set2Reps, 'attempt-2') : '';
     const cameraLabel = cameraViewLabel(orderedReps[0]?.viewMode ?? cameraView);
-    const protocol = `[set1=${set1Feedback}${set2Feedback ? ` set2=${set2Feedback}` : ''} camera=${cameraLabel}]`;
+    const tempoCues = tempoCuesLabel(orderedReps);
+    const protocol = `[set1=${set1Feedback}${set2Feedback ? ` set2=${set2Feedback}` : ''} tempo=${tempoCues} camera=${cameraLabel}]`;
     const notesSummary = [...new Set([...focusLines, ...sessionReps.flatMap((rep) => rep.notes)])].slice(0, 6).join('; ');
     return {
       timestamp: nowIso(),
@@ -1359,6 +1460,7 @@ export default function App() {
       set1_feedback: set1Feedback,
       set2_feedback: set2Feedback,
       camera_view: cameraLabel,
+      tempo_cues: tempoCues,
     };
   };
 
@@ -1602,7 +1704,7 @@ export default function App() {
     const summary = buildSessionSummary();
     downloadTextFile(
       `pushup-session-${summary.id}-notes.md`,
-      buildNotesExport({ ...summary, mode: feedbackMode, cameraView, spokenCoachingEnabled }, orderedReps),
+      buildNotesExport({ ...summary, mode: feedbackMode, cameraView, spokenCoachingEnabled, tempoCues: tempoCuesLabel(orderedReps) }, orderedReps),
       'text/markdown',
     );
   };
@@ -1909,6 +2011,8 @@ export default function App() {
               onFeedbackSettingChange={setFeedbackSetting}
               spokenCoaching={spokenTipsSwitch}
               onSpokenCoachingChange={setSpokenTipsSwitch}
+              tempoCues={tempoCuesSwitch}
+              onTempoCuesChange={setTempoCuesSwitch}
               cameraFacing={cameraFacing}
               onCameraFacingChange={setCameraFacing}
               cameraView={cameraView}

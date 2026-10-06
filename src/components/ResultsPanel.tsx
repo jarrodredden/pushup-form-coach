@@ -1,4 +1,5 @@
-import { improvementVerdict, REPS_PER_SET, type SetSummary, type WorkflowMode } from '../lib/sessionFlow';
+import { tempoCuesText } from '../lib/export';
+import { improvementVerdict, REPS_PER_SET, tempoCuesLabel, type SetSummary, type WorkflowMode } from '../lib/sessionFlow';
 import type { SessionRep } from '../lib/types';
 import { PlankDebugList } from './AdminSheet';
 import { CompareBar, MetricBar } from './MetricBar';
@@ -45,6 +46,7 @@ export function ResultsPanel(props: ResultsPanelProps) {
   const verdict = improvementVerdict(delta);
   const ordered = [...reps].sort((a, b) => a.index - b.index);
   const displayName = name.trim() || 'Volunteer';
+  const tempoCues = tempoCuesLabel(ordered);
 
   return (
     <div className="results">
@@ -129,6 +131,7 @@ export function ResultsPanel(props: ResultsPanelProps) {
           ) : (
             <RepTiles label="Reps" reps={ordered} />
           )}
+          {tempoCues !== 'off' ? <p className="fine-print">Up / Down tempo cues: {tempoCuesText(tempoCues)}.</p> : null}
         </section>
       ) : null}
 

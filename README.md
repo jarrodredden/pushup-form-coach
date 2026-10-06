@@ -70,13 +70,26 @@ How grading uses it: every metric is a 0–100 form score. A rep scoring at or a
 
 **In-set feedback is corrective only.** After each rep the coach names the single weakest part of that rep (for example "Tuck your elbows", "Lower your chest", "Keep your hips up", "Squeeze your core", "Full lockout at the top"), rotating phrasing so the same line never plays twice in a row. A clean rep gets silence, or rarely a neutral "Keep that form" (at most once per set). Praise is saved for the end: "Set one done. Nice work!" before the rest, and a session wrap-up with the set 1 → set 2 change ("Great work! You improved by 8 points from set 1 to set 2."). Spoken lines still queue, so they never overlap or cut off. Lines are in `src/lib/feedbackLines.json`; `node scripts/generate-voices.mjs` makes any missing MP3s.
 
+### Real-time "Up" / "Down" tempo cues (set 2)
+
+During the coached set the voice says **"Down"** the moment the volunteer locks out at the top (the start of each rep, including the first one after **Go!**) and **"Up"** the moment the elbows reach the target depth (depth score 80, about 100° of elbow bend, the same depth that avoids the "Lower your chest" correction). That tells them when they've gone deep enough. The cues come from the live pose, not a metronome, so they follow the volunteer's own pace.
+
+- **One Down and one Up per rep.** Each cue arms the other, and the two thresholds are about 60° of elbow bend apart, so landmark jitter around either one can't fire it twice. Two cues are never closer than 280 ms. A shallow rep that never reaches depth gets no Up, but its next lockout still gets a Down. There's no Down at the last lockout of the set, and the first Down waits until "Go!" has been spoken (at most 2.5 s).
+- **Instant playback.** Cues don't use speech synthesis or `<audio>` elements. The two clips (`src/assets/tempo/up.wav`, `down.wav`, same voice as the other clips, silence trimmed) are inlined into the app bundle, decoded into Web Audio buffers on the **Start camera and sound** tap, and started with an `AudioBufferSourceNode` on the same pose frame that crosses the threshold. This also works on iPhone (the tap unlocks audio, and the audio session is set to playback so the ringer switch doesn't mute it) and in the offline package (no files to fetch).
+- **Coaching lines never block a cue.** Cues skip the FIFO queue. A line that's already playing is ducked to 30% volume under the cue (iPhone ignores web media volume, so there they simply mix), and the next queued line waits until the cue finishes. Corrections still play, in the gaps.
+- **Only with audio.** On in Combined and Audio modes, so in the volunteer protocol that's set 2 (and free practice). Never in set 1 / Control or Visual. Admin can switch them off with **Up / Down tempo cues** in the Feedback card; volunteers can't.
+- **Logged.** Each rep records whether cues were on, the results screen says "Up / Down tempo cues: on for set 2", the notes export has the same line, and the Sheet row has a `tempo_cues` column (`set2`, `off`, …) plus `tempo=set2` in the notes summary.
+- **Latency.** **Admin → Diagnostics** logs every cue with its timing: pose result → `start()` (well under 1 ms), plus the browser's reported audio output latency, plus that frame's pose inference time. A per-set summary is logged too.
+
+To regenerate the clips: `node scripts/generate-tempo-cues.mjs` (needs `ffmpeg` and internet).
+
 ## Results upload (Google Sheet)
 
 Upload posts one row as `text/plain` JSON to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.
 
-The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, a short user agent, and the protocol: **set1_feedback** / **set2_feedback** (e.g. `control` / `combined`) and **camera_view** (`front` / `side`). The script writes values by header name and adds any missing header columns to the right, so existing sheets keep their rows. The notes summary also starts with `[set1=control set2=combined camera=front]`, so the protocol is recorded even before the script is redeployed.
+The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, a short user agent, and the protocol: **set1_feedback** / **set2_feedback** (e.g. `control` / `combined`), **camera_view** (`front` / `side`), and **tempo_cues** (`set2` when the Up / Down cues were on for set 2, otherwise `off`). The script writes values by header name and adds any missing header columns to the right, so existing sheets keep their rows. The notes summary also starts with `[set1=control set2=combined tempo=set2 camera=front]`, so the protocol is recorded even before the script is redeployed.
 
-**Redeploy for the protocol columns (Jarrod):** paste the current `Code.gs` into **Extensions → Apps Script**, **Save**, then **Deploy → Manage deployments → pencil → Version: New version → Deploy** (same `/exec` URL).
+**Redeploy for the protocol and `tempo_cues` columns (Jarrod):** paste the current `Code.gs` into **Extensions → Apps Script**, **Save**, then **Deploy → Manage deployments → pencil → Version: New version → Deploy** (same `/exec` URL).
 
 The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts) into the spreadsheet's parent Drive folder and logs them on a **Consents** tab.
 
@@ -118,7 +131,7 @@ The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
 ## Phone tips
 
 - Camera access needs a secure context: the https Vercel link, `localhost`, or the offline package opened as a local file.
-- Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts.
+- Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts. The Up / Down tempo cues bypass that queue (see above).
 - Head-on is the recommended setup. Use Side only with room for a tripod about 2 m away.
 - The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on stream metadata/resize, window resize, and orientation change, so the skeleton always sits on the person.
 

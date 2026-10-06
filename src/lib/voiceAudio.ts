@@ -66,8 +66,64 @@ function queueFallbackSpeech(message: string) {
   }
 }
 
+/**
+ * Real-time tempo cues (tempoAudio.ts) bypass this queue. While one is sounding, queued lines wait for
+ * the gap after it, and a line that's already playing is ducked underneath it.
+ */
+let holdUntil = 0;
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+let duckTimer: ReturnType<typeof setTimeout> | null = null;
+let duckedAudio: HTMLAudioElement | null = null;
+const DUCK_VOLUME = 0.3;
+
+export function voiceQueueIdle() {
+  return !voiceBusy && voiceQueue.length === 0;
+}
+
+export function holdVoiceQueue(ms: number) {
+  holdUntil = Math.max(holdUntil, performance.now() + ms);
+  if (holdTimer) clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    playNextClip();
+  }, Math.max(0, holdUntil - performance.now()));
+}
+
+/** Lowers the line that's playing for `ms`. iOS ignores media volume, so there it simply mixes. */
+export function duckVoice(ms: number) {
+  const audio = activeAudio;
+  if (!audio) return;
+  audio.volume = DUCK_VOLUME;
+  duckedAudio = audio;
+  if (duckTimer) clearTimeout(duckTimer);
+  duckTimer = setTimeout(() => {
+    duckTimer = null;
+    if (duckedAudio) duckedAudio.volume = 1;
+    duckedAudio = null;
+  }, ms);
+}
+
+const stoppedClips = new WeakSet<HTMLAudioElement>();
+
+/** Drops queued lines and stops the one playing, so a countdown isn't spoken behind a stale line. */
+export function clearVoiceQueue() {
+  voiceQueue.length = 0;
+  const audio = activeAudio;
+  if (audio) {
+    stoppedClips.add(audio);
+    audio.pause();
+  }
+  activeAudio = null;
+  duckedAudio = null;
+  voiceBusy = false;
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
 function playNextClip() {
   if (voiceBusy) return;
+  if (performance.now() < holdUntil) return;
   const next = voiceQueue.shift();
   if (!next) return;
 
@@ -77,6 +133,7 @@ function playNextClip() {
   activeAudio = audio;
 
   const finish = () => {
+    if (stoppedClips.has(audio)) return;
     if (activeAudio === audio) {
       activeAudio = null;
     }
@@ -86,6 +143,7 @@ function playNextClip() {
 
   audio.onended = finish;
   audio.onerror = () => {
+    if (stoppedClips.has(audio)) return;
     const fallbackPlayed = queueFallbackSpeech(next.fallback);
     if (!fallbackPlayed) {
       // Keep moving even if the fallback isn't available.
@@ -97,6 +155,7 @@ function playNextClip() {
     const result = audio.play();
     if (result && typeof result.catch === 'function') {
       void result.catch(() => {
+        if (stoppedClips.has(audio)) return;
         const fallbackPlayed = queueFallbackSpeech(next.fallback);
         if (!fallbackPlayed) {
           // Keep moving even if the fallback isn't available.
