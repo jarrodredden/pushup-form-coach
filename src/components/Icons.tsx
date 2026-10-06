@@ -111,3 +111,18 @@ export const SpeakerIcon = (props: IconProps) => (
     <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" />
   </Svg>
 );
+
+export const CopyIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <rect x="8" y="8" width="12" height="12" rx="2.5" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </Svg>
+);
+
+export const ShareIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M12 15V4" />
+    <path d="M7.5 8.5L12 4l4.5 4.5" />
+    <path d="M7 11H5.5A1.5 1.5 0 0 0 4 12.5v6A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-6a1.5 1.5 0 0 0-1.5-1.5H17" />
+  </Svg>
+);

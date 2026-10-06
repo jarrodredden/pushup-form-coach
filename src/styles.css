@@ -755,6 +755,45 @@ h1, h2, h3, p { margin: 0; }
 .verdict--steady .verdict__delta strong { color: var(--text); }
 .verdict__delta span { color: var(--muted); font-weight: 700; }
 
+/* ---------- Share ---------- */
+.share { display: grid; gap: 14px; }
+.share__head { display: grid; gap: 8px; padding: 6px 2px 2px; text-align: center; justify-items: center; }
+.share__head h1 { font-size: clamp(1.8rem, 7vw, 2.5rem); line-height: 1.08; letter-spacing: -0.03em; font-weight: 900; max-width: 18ch; text-wrap: balance; }
+.share__lead { color: var(--muted); font-size: 1.08rem; }
+.share__card {
+  gap: 18px;
+  padding: 20px;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(200, 255, 61, 0.12), transparent 60%), var(--surface);
+  border-color: rgba(200, 255, 61, 0.28);
+}
+.share__qr { display: grid; justify-items: center; gap: 8px; margin: 0; }
+.share__qr svg { display: block; width: min(210px, 54vw); height: auto; border-radius: 14px; }
+.share__qr figcaption { font-size: 0.86rem; font-weight: 700; color: var(--muted); }
+.share__actions { display: grid; gap: 12px; align-content: center; min-width: 0; }
+.share__link-box { display: grid; gap: 8px; }
+.share__link {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--line-strong);
+  text-align: center;
+  font-size: clamp(1.05rem, 4.6vw, 1.2rem);
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--volt);
+  user-select: all;
+  -webkit-user-select: all;
+  cursor: text;
+}
+.share__host { white-space: nowrap; }
+.share__link::selection, .share__link *::selection { background: var(--volt); color: var(--volt-ink); }
+.share__status { min-height: 1.3em; text-align: center; font-size: 0.9rem; color: var(--muted); }
+.btn--primary.is-copied, .btn--primary.is-copied:hover:not(:disabled) { background: var(--good); color: #052e16; }
+@media (min-width: 600px) {
+  .share__card { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+  .share__qr svg { width: 200px; }
+}
+
 .compare-list { display: grid; gap: 16px; }
 .compare { display: grid; gap: 6px; }
 .compare__head { display: flex; justify-content: space-between; font-weight: 700; }

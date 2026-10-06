@@ -21,6 +21,7 @@
     "@supabase/supabase-js": "^2.117.1",
     "google-tts-api": "^2.0.2",
     "jspdf": "^4.2.1",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

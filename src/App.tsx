@@ -3,7 +3,8 @@ import { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { AdminSheet } from './components/AdminSheet';
 import { ConsentSheet, type ConsentSubmission } from './components/ConsentSheet';
 import { HistorySheet } from './components/HistorySheet';
-import { CameraIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
+import { CameraIcon, ChevronIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
+import { SharePanel } from './components/SharePanel';
 import { BreakPanel, CalibratingPanel, LiveFormPanel, type ChecklistItem } from './components/LivePanels';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SetupPanel, type ConsentDriveState } from './components/SetupPanel';
@@ -309,6 +310,7 @@ export default function App() {
   const [calibrationState, setCalibrationState] = useState<CalibrationState>('idle');
   const [calibrationConfidence, setCalibrationConfidence] = useState(0);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
+  const [showShare, setShowShare] = useState(false);
   const [showGoOverlay, setShowGoOverlay] = useState(false);
   const [checkingElapsedMs, setCheckingElapsedMs] = useState(0);
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
@@ -701,6 +703,7 @@ export default function App() {
     setUploadState('idle');
     setUploadMessage('');
     setSavedLocally(false);
+    setShowShare(false);
     repCounterRef.current.reset();
     attemptRepCountRef.current = { 1: 0, 2: 0 };
     feedbackMemoryRef.current = createFeedbackMemory();
@@ -1402,6 +1405,12 @@ export default function App() {
     setPaused(false);
   };
 
+  const openShare = () => {
+    setShowShare(true);
+    pushLog('system', 'Session finished. Showing the share page.');
+    window.scrollTo({ top: 0 });
+  };
+
   const nextVolunteer = () => {
     resetForRetry();
     setAthleteName('');
@@ -1874,14 +1883,26 @@ export default function App() {
           </div>
         );
       case 'results':
+        if (showShare) {
+          return (
+            <div className="btn-row">
+              <button className="btn btn--ghost" onClick={() => setShowShare(false)}>
+                Back to results
+              </button>
+              <button className="btn btn--primary btn--xl btn--grow" onClick={nextVolunteer}>
+                Next volunteer
+              </button>
+            </div>
+          );
+        }
         return (
           <div className="btn-row">
             <button className="btn btn--ghost" onClick={resetForRetry} aria-label="Try again with the same name">
               <RetryIcon /> Try again
             </button>
             {uploadState === 'done' ? (
-              <button className="btn btn--primary btn--xl btn--grow" onClick={nextVolunteer}>
-                Next volunteer
+              <button className="btn btn--primary btn--xl btn--grow" onClick={openShare}>
+                Finish <ChevronIcon />
               </button>
             ) : (
               <button
@@ -2064,7 +2085,8 @@ export default function App() {
             />
           ) : null}
 
-          {phase === 'results' ? (
+          {phase === 'results' && showShare ? <SharePanel name={athleteName} /> : null}
+          {phase === 'results' && !showShare ? (
             <ResultsPanel
               mode={workflowMode}
               name={athleteName}
@@ -2082,6 +2104,7 @@ export default function App() {
               onExportNotes={exportNotes}
               onExportCsv={exportCsv}
               adminUnlocked={adminUnlocked}
+              onFinishWithoutUpload={uploadState === 'error' || isOfflinePackage ? openShare : undefined}
             />
           ) : null}
 

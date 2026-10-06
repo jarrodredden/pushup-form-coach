@@ -21,6 +21,8 @@ interface ResultsPanelProps {
   onExportNotes: () => void;
   onExportCsv: () => void;
   adminUnlocked: boolean;
+  /** Shown when the upload can't happen (offline or failed), so the session can still be finished. */
+  onFinishWithoutUpload?: () => void;
 }
 
 function RepTiles({ reps, label }: { reps: SessionRep[]; label: string }) {
@@ -173,6 +175,11 @@ export function ResultsPanel(props: ResultsPanelProps) {
             Export CSV
           </button>
         </div>
+        {props.onFinishWithoutUpload && props.uploadState !== 'done' ? (
+          <button className="btn btn--ghost btn--block" onClick={props.onFinishWithoutUpload}>
+            Finish without uploading
+          </button>
+        ) : null}
       </section>
     </div>
   );
