@@ -172,7 +172,7 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--shadow);
   isolation: isolate;
 }
-.app--break .stage { height: max(300px, 50svh); }
+.app--break .stage { height: max(200px, 30svh); }
 /* JS sizes both layers from one cover transform (see stageLayout.ts); these are pre-layout fallbacks. */
 .stage__video, .stage__overlay { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
 .stage__video { object-fit: cover; }
@@ -674,6 +674,52 @@ h1, h2, h3, p { margin: 0; }
 .rest-card--done .rest-card__label { color: var(--good); }
 .rest-card--done .rest-card__fill { background: var(--good); }
 .rest-card__admin { justify-self: start; border: 1px dashed var(--mid); color: var(--mid); }
+.rest-card { container-type: inline-size; }
+.rest-card__body { display: grid; gap: 12px; }
+.rest-card__timer { display: grid; gap: 10px; }
+@container (min-width: 520px) {
+  .rest-card__body.has-demo {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-areas: 'demo head' 'demo timer';
+    align-content: center;
+    column-gap: 18px;
+  }
+  .rest-card__body.has-demo .pushup-demo { grid-area: demo; }
+  .rest-card__body.has-demo .rest-card__head { grid-area: head; align-self: end; }
+  .rest-card__body.has-demo .rest-card__timer { grid-area: timer; align-self: start; }
+}
+
+.pushup-demo {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 10px 12px;
+  border-radius: var(--radius-md);
+  background: radial-gradient(120% 90% at 50% 20%, rgba(200, 255, 61, 0.08), transparent 70%), var(--surface-2);
+}
+.pushup-demo__svg { display: block; width: 100%; height: min(230px, 26svh); min-height: 170px; overflow: visible; }
+.pushup-demo__mat { fill: rgba(255, 255, 255, 0.05); stroke: rgba(255, 255, 255, 0.08); stroke-width: 0.004; }
+.pushup-demo__guide { stroke: rgba(200, 255, 61, 0.5); stroke-linecap: round; fill: none; }
+.pushup-demo__torso { fill: rgba(200, 255, 61, 0.12); }
+.pushup-demo__bone { stroke-linecap: round; }
+.pushup-demo__bone--arm { stroke: var(--volt); }
+.pushup-demo__bone--torso { stroke: #e6ffad; }
+.pushup-demo__bone--leg { stroke: #8fae45; }
+.pushup-demo__joint { fill: #f4ffe0; }
+.pushup-demo__head { fill: var(--surface-2); stroke: #e6ffad; }
+.pushup-demo__phase { display: flex; justify-content: center; gap: 8px; }
+.pushup-demo__phase span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: rgba(255, 255, 255, 0.04);
+}
+.pushup-demo__phase span.is-on { color: var(--volt-ink); background: var(--volt); }
+.pushup-demo__caption { text-align: center; font-size: 0.95rem; font-weight: 700; line-height: 1.35; color: var(--text); }
 
 /* ---------- Results ---------- */
 .results { display: grid; gap: 14px; }

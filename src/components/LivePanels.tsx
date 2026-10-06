@@ -2,6 +2,7 @@ import type { SetSummary } from '../lib/sessionFlow';
 import type { SessionRep } from '../lib/types';
 import { CheckIcon } from './Icons';
 import { MetricBar } from './MetricBar';
+import { PushupDemo } from './PushupDemo';
 import { SpokenTipsSwitch } from './SetupPanel';
 
 export interface ChecklistItem {
@@ -107,32 +108,37 @@ export function BreakPanel({
   const restProgress = restTotalMs > 0 ? Math.min(1, Math.max(0, 1 - restRemainingMs / restTotalMs)) : 1;
   return (
     <>
-      <section className={resting ? 'card rest-card' : 'card rest-card rest-card--done'} aria-live="polite">
-        <div className="rest-card__head">
-          <span className="rest-card__label">{resting ? 'Rest' : 'Rest complete'}</span>
-          <strong className="rest-card__clock" role="timer" aria-label={`Rest ${restClock} remaining`}>
-            {restClock}
-          </strong>
+      <section className={resting ? 'card rest-card' : 'card rest-card rest-card--done'}>
+        <div className={visualsAllowed ? 'rest-card__body has-demo' : 'rest-card__body'}>
+          <div className="rest-card__head" aria-live="polite">
+            <span className="rest-card__label">{resting ? 'Rest' : 'Rest complete'}</span>
+            <strong className="rest-card__clock" role="timer" aria-label={`Rest ${restClock} remaining`}>
+              {restClock}
+            </strong>
+          </div>
+          {visualsAllowed ? <PushupDemo /> : null}
+          <div className="rest-card__timer">
+            <div
+              className="rest-card__track"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(restProgress * 100)}
+            >
+              <div className="rest-card__fill" style={{ width: `${restProgress * 100}%` }} />
+            </div>
+            <p className="fine-print">
+              {resting
+                ? 'Catch your breath so set 2 isn’t skewed by fatigue. Review your focus below — set 2 unlocks when the timer hits 0:00.'
+                : 'You’re rested. Tap Start set 2 when you’re ready.'}
+            </p>
+            {adminUnlocked && resting ? (
+              <button type="button" className="btn btn--ghost btn--small rest-card__admin" onClick={onAdminSkipRest}>
+                Skip rest (admin only — testing)
+              </button>
+            ) : null}
+          </div>
         </div>
-        <div
-          className="rest-card__track"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(restProgress * 100)}
-        >
-          <div className="rest-card__fill" style={{ width: `${restProgress * 100}%` }} />
-        </div>
-        <p className="fine-print">
-          {resting
-            ? 'Catch your breath so set 2 isn’t skewed by fatigue. Review your focus below — set 2 unlocks when the timer hits 0:00.'
-            : 'You’re rested. Tap Start set 2 when you’re ready.'}
-        </p>
-        {adminUnlocked && resting ? (
-          <button type="button" className="btn btn--ghost btn--small rest-card__admin" onClick={onAdminSkipRest}>
-            Skip rest (admin only — testing)
-          </button>
-        ) : null}
       </section>
       <section className="card break-card">
         <div className="break-card__score">
