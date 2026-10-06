@@ -81,6 +81,8 @@ export interface SessionRep {
   hipBias?: number;
   bottomElbowAngle?: number;
   elbowAbduction?: number;
+  /** Feedback the volunteer received while doing this rep. */
+  feedbackMode?: FeedbackMode;
   confidence: number;
   timestamp: number;
 }

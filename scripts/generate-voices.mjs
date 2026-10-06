@@ -4,30 +4,24 @@ import path from 'node:path';
 import googleTTS from 'google-tts-api';
 
 const OUT_DIR = path.resolve('public/voices');
+const FORCE = process.argv.includes('--force');
 
-const encouragements = {
-  low: [
-    "You've got this — drop a bit lower next one.",
-    "Shake it off — next one's yours.",
-    'Nice try — a little deeper next rep.',
-    'Keep going — just a bit lower.',
-    'You can do it — one more notch deeper.',
-  ],
-  mid: [
-    "Good rep — a little more depth and you're golden.",
-    'Nice work — keep that one coming.',
-    'Solid — a touch deeper next time.',
-    "Good job — that's moving the right way.",
-    'Strong rep — keep chasing the depth.',
-  ],
-  high: [
-    'Nice! That was a strong one.',
-    'Yes! Deep and solid!',
-    'Great one — keep that energy.',
-    'Awesome rep — that was clean.',
-    "Big rep — you're flying now.",
-  ],
-};
+// Shared with src/lib/repFeedback.ts: corrective in-set cues plus the end-of-set/session wrap-ups.
+const feedback = JSON.parse(await fs.readFile(path.resolve('src/lib/feedbackLines.json'), 'utf8'));
+
+function sessionWrapUp(points) {
+  if (points > 0) return feedback.sessionImproved.replace('{n}', String(points)).replace('{points}', points === 1 ? 'point' : 'points');
+  return points === 0 ? feedback.sessionSteady : feedback.sessionDeclined;
+}
+
+const feedbackLines = [
+  ...Object.values(feedback.corrective).flat(),
+  feedback.neutral,
+  feedback.set1Done,
+  ...Array.from({ length: feedback.maxImprovementClip }, (_, i) => sessionWrapUp(i + 1)),
+  sessionWrapUp(0),
+  sessionWrapUp(-1),
+];
 
 const tips = [
   'Go a little deeper while keeping hips level',
@@ -50,7 +44,7 @@ const files = [
   ...Array.from({ length: 5 }, (_, i) => [`countdown-${i + 1}`, `${i + 1}!`]),
   ...Array.from({ length: 20 }, (_, i) => [`rep-${i + 1}`, `Rep ${i + 1}`]),
   ...tips.map((text) => [slugify(text), text]),
-  ...Object.values(encouragements).flatMap((phrases) => phrases.map((text) => [slugify(text), text])),
+  ...feedbackLines.map((text) => [slugify(text), text]),
 ];
 
 function slugify(text) {
@@ -75,6 +69,7 @@ async function main() {
   await fs.mkdir(OUT_DIR, { recursive: true });
   for (const [name, text] of files) {
     const targetPath = path.join(OUT_DIR, `${name}.mp3`);
+    if (!FORCE && (await fs.stat(targetPath).catch(() => null))) continue;
     const url = googleTTS.getAudioUrl(text, {
       lang: 'en-US',
       slow: false,

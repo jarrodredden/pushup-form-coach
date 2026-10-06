@@ -1,0 +1,18 @@
+{
+  "corrective": {
+    "depth": ["Lower your chest.", "Go a little deeper.", "Chest closer to the floor."],
+    "hipSag": ["Keep your hips up.", "Squeeze your core.", "Lift your hips in line."],
+    "hipPike": ["Hips down.", "Lower your hips in line.", "Flatten out your body."],
+    "bodyLine": ["Hold a straight body line.", "Squeeze your core."],
+    "elbowFlare": ["Tuck your elbows.", "Elbows closer to your sides.", "Keep your elbows in."],
+    "handStack": ["Hands under your shoulders.", "Line your hands up under your shoulders."],
+    "headAlignment": ["Keep your head in line.", "Eyes down, neck neutral."],
+    "lockout": ["Full lockout at the top.", "Straighten your arms at the top."]
+  },
+  "neutral": "Keep that form.",
+  "set1Done": "Set one done. Nice work! Rest for two minutes and watch the ideal form.",
+  "sessionImproved": "Great work! You improved by {n} {points} from set 1 to set 2.",
+  "sessionSteady": "Great work finishing both sets! Your score held steady.",
+  "sessionDeclined": "Great work finishing both sets! Check your results for what to work on next.",
+  "maxImprovementClip": 60
+}

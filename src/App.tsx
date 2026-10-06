@@ -44,6 +44,16 @@ import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
 import { updatePlankReference, type PlankReference } from './lib/plankLine';
 import {
+  allFeedbackLines,
+  CORRECTIVE_LINES,
+  correctionPhrase,
+  createFeedbackMemory,
+  repFeedback,
+  sessionWrapUp,
+  SET_ONE_WRAP_UP,
+  type CorrectionKey,
+} from './lib/repFeedback';
+import {
   addRepFrame,
   analyzePose,
   createEmptyRepAccumulator,
@@ -58,6 +68,9 @@ import {
   attemptForTrialState,
   coachingFocusLines,
   deriveJourneyPhase,
+  feedbackModeFor,
+  spokenTipsFor,
+  type FeedbackSetting,
   formatRestClock,
   journeySteps,
   REPS_PER_SET,
@@ -71,13 +84,12 @@ import {
 } from './lib/sessionFlow';
 import { isOfflinePackage, loadPoseAssets } from './lib/poseAssets';
 import { loadHistory, saveHistory } from './lib/storage';
-import { playVoiceClip, playVoiceMessage, preloadVoiceClips } from './lib/voiceAudio';
+import { playVoiceClip, playVoiceMessage, preloadVoiceClips, resolveVoiceClipNames } from './lib/voiceAudio';
 import type {
   BaselineAngle,
   BaselinePoseReference,
   CameraFacing,
   CameraViewMode,
-  FeedbackMode,
   LogEntry,
   PoseAnalysis,
   PosePoint,
@@ -100,7 +112,11 @@ type UploadState = 'idle' | 'uploading' | 'done' | 'error';
 type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
 const nowIso = () => new Date().toISOString();
-const freshRepState = () => ({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0 });
+const cameraViewLabel = (view: CameraViewMode) => (view === 'head-on' ? 'front' : 'side');
+const freshRepState = () => ({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0, stallSince: 0, lockoutCued: false });
+/** Arms held in this band after the bottom for LOCKOUT_STALL_MS means the rep stopped short of lockout. */
+const LOCKOUT_STALL_MIN_ANGLE = 135;
+const LOCKOUT_STALL_MS = 1200;
 
 let poseLandmarkerPromise: Promise<PoseLandmarker> | null = null;
 
@@ -124,12 +140,6 @@ function createPoseLandmarker() {
 function speak(message: string) {
   playVoiceMessage(message);
 }
-
-const repEncouragements = {
-  low: ['You’ve got this — drop a bit lower next one.', 'Shake it off — next one’s yours.', 'Nice try — a little deeper next rep.', 'Keep going — just a bit lower.', 'You can do it — one more notch deeper.'],
-  mid: ['Good rep — a little more depth and you’re golden.', 'Nice work — keep that one coming.', 'Solid — a touch deeper next time.', 'Good job — that’s moving the right way.', 'Strong rep — keep chasing the depth.'],
-  high: ['Nice! That was a strong one.', 'Yes! Deep and solid!', 'Great one — keep that energy.', 'Awesome rep — that was clean.', 'Big rep — you’re flying now.'],
-};
 
 async function unlockAudioContext(contextRef: { current: AudioContext | null }) {
   const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -215,12 +225,13 @@ export default function App() {
   const calibrationStateRef = useRef<CalibrationState>('idle');
   const cueLastTextRef = useRef('');
   const cueLastEmittedAtRef = useRef(0);
+  const cueHoldUntilRef = useRef(0);
   const repSpeechLockUntilRef = useRef(0);
 
   const [secureContext, setSecureContext] = useState(window.isSecureContext);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
   const [cameraView, setCameraView] = useState<CameraViewMode>('head-on');
-  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('combined');
+  const [feedbackSetting, setFeedbackSetting] = useState<FeedbackSetting>('study');
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'loading' | 'live' | 'error'>('idle');
   const [cameraError, setCameraError] = useState('');
   const [poseReady, setPoseReady] = useState(false);
@@ -229,7 +240,7 @@ export default function App() {
   const [sessionReps, setSessionReps] = useState<SessionRep[]>([]);
   const [analysis, setAnalysis] = useState<PoseAnalysis | null>(null);
   const [currentCue, setCurrentCue] = useState('');
-  const [spokenCoachingEnabled, setSpokenCoachingEnabled] = useState(false);
+  const [spokenTipsSwitch, setSpokenTipsSwitch] = useState(true);
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>('coaching');
   const [coachingTrialState, setCoachingTrialState] = useState<CoachingTrialState>('idle');
   const [coachingPaused, setCoachingPaused] = useState(false);
@@ -280,6 +291,8 @@ export default function App() {
   const [activeBanner, setActiveBanner] = useState<string | null>(null);
 
   const previewMirrored = shouldMirrorPreview(cameraFacing);
+  const feedbackMode = feedbackModeFor(feedbackSetting, workflowMode, coachingTrialState);
+  const spokenCoachingEnabled = spokenTipsFor(feedbackSetting, feedbackMode, spokenTipsSwitch);
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
   const gradingAngle = gradingAngleForView(cameraView);
@@ -289,11 +302,21 @@ export default function App() {
   const workflowModeRef = useRef(workflowMode);
   const coachingTrialStateRef = useRef(coachingTrialState);
   const coachingPausedRef = useRef(coachingPaused);
-  const repEncouragementTickRef = useRef(0);
+  const feedbackMemoryRef = useRef(createFeedbackMemory());
+  const spokenFormCueRef = useRef<{ key: CorrectionKey | null; at: number }>({ key: null, at: 0 });
 
+  const feedbackSettingRef = useRef(feedbackSetting);
   useEffect(() => {
     feedbackModeRef.current = feedbackMode;
   }, [feedbackMode]);
+  useEffect(() => {
+    feedbackSettingRef.current = feedbackSetting;
+  }, [feedbackSetting]);
+  useEffect(() => {
+    if (adminUnlocked) return;
+    setFeedbackSetting('study');
+    setCameraView('head-on');
+  }, [adminUnlocked]);
   useEffect(() => {
     audioUnlockedRef.current = audioUnlocked;
   }, [audioUnlocked]);
@@ -647,7 +670,8 @@ export default function App() {
     setSavedLocally(false);
     repCounterRef.current.reset();
     attemptRepCountRef.current = { 1: 0, 2: 0 };
-    repEncouragementTickRef.current = 0;
+    feedbackMemoryRef.current = createFeedbackMemory();
+    spokenFormCueRef.current = { key: null, at: 0 };
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = freshRepState();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
@@ -668,28 +692,10 @@ export default function App() {
       'countdown-5',
       'lets-get-started',
       'go',
-      'go-a-little-deeper-while-keeping-hips-level',
-      'dont-pike-hips-down',
-      'dont-sag-squeeze-your-belly',
-      'tuck-elbows-in',
-      'hands-under-shoulders',
-      'keep-head-centered',
       'back-up-for-hands-and-torso',
-      'good-rep-a-little-more-depth-and-youre-golden',
-      'nice-that-was-a-strong-one',
-      'yes-deep-and-solid',
-      'great-one-keep-that-energy',
-      'awesome-rep-that-was-clean',
-      'big-rep-youre-flying-now',
-      'good-job-thats-moving-the-right-way',
-      'nice-work-keep-that-one-coming',
-      'solid-a-touch-deeper-next-time',
-      'strong-rep-keep-chasing-the-depth',
-      'youve-got-this-drop-a-bit-lower-next-one',
-      'shake-it-off-next-ones-yours',
-      'nice-try-a-little-deeper-next-rep',
-      'keep-going-just-a-bit-lower',
-      'you-can-do-it-one-more-notch-deeper',
+      ...allFeedbackLines()
+        .filter((line) => !line.includes('improved by'))
+        .flatMap((line) => resolveVoiceClipNames(line) ?? []),
     ]);
     setAudioUnlocked(true);
     localStorage.setItem(SOUND_WANTED_KEY, '1');
@@ -757,39 +763,72 @@ export default function App() {
     };
   };
 
-  const renderAnalysisCue = (cue: string) => {
+  const currentModeAllows = (mode = feedbackModeRef.current) => ({
+    visuals: mode === 'visual' || mode === 'combined',
+    audio: mode === 'audio' || mode === 'combined',
+  });
+
+  const canSpeakTips = () => spokenCoachingEnabledRef.current && currentModeAllows().audio && audioUnlockedRef.current;
+
+  /** Live spoken form cue: rotated phrasing, never the line just spoken, and spaced out from rep cues. */
+  const speakFormCue = (key: CorrectionKey) => {
+    if (!canSpeakTips()) return;
+    const now = Date.now();
+    if (now < repSpeechLockUntilRef.current) return;
+    const last = spokenFormCueRef.current;
+    if (last.key === key && now - last.at < 6000) return;
+    const phrase = correctionPhrase(feedbackMemoryRef.current, key);
+    feedbackMemoryRef.current = phrase.memory;
+    spokenFormCueRef.current = { key, at: now };
+    repSpeechLockUntilRef.current = now + 2500;
+    pushLog('cue', phrase.text);
+    speak(phrase.text);
+  };
+
+  const renderAnalysisCue = (cue: string, formKey?: CorrectionKey) => {
     const shortCue = shortenCue(cue);
     const now = Date.now();
+    if (now < cueHoldUntilRef.current) return;
     const isNewCue = shortCue !== cueLastTextRef.current;
     const cooldownExpired = now - cueLastEmittedAtRef.current >= 5000;
     if (!isNewCue && !cooldownExpired) return;
 
     cueLastTextRef.current = shortCue;
     cueLastEmittedAtRef.current = now;
-    const currentModeAllowsVisuals = feedbackModeRef.current === 'visual' || feedbackModeRef.current === 'combined';
-    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-
-    if (currentModeAllowsVisuals) {
+    if (currentModeAllows().visuals) {
       setCurrentCue(shortCue);
     }
 
-    if (!spokenCoachingEnabledRef.current || !currentModeAllowsAudio || !audioUnlockedRef.current || Date.now() < repSpeechLockUntilRef.current) {
+    if (formKey) {
+      speakFormCue(formKey);
       return;
     }
-
+    if (!canSpeakTips() || now < repSpeechLockUntilRef.current) return;
     pushLog('cue', shortCue);
     speak(shortCue);
   };
 
+  /** Shows a cue and keeps live cues from replacing it for a moment. */
+  const holdCue = (text: string, holdMs = 2500) => {
+    cueLastTextRef.current = text;
+    cueLastEmittedAtRef.current = Date.now();
+    cueHoldUntilRef.current = Date.now() + holdMs;
+    setCurrentCue(text);
+  };
+
   const updateCoachingFocus = (frame: PoseAnalysis) => {
     const now = Date.now();
-    const issues = liveCoachingIssues(frame, calibrationStateRef.current === 'counting');
+    // Depth is judged per rep (it reads 0 at every top), and straight arms at the top say nothing about elbow tuck.
+    const issues = liveCoachingIssues(frame, calibrationStateRef.current === 'counting').filter(
+      (issue) => issue.key !== 'depth' && (issue.key !== 'elbowFlare' || frame.elbowAngle <= 140),
+    );
+    const formKey = (key: CoachingIssueKey) => (key === 'setup' ? undefined : key);
     const active = coachingFocusRef.current;
     const activeIssue = active.key ? issues.find((issue) => issue.key === active.key) : null;
 
     if (activeIssue) {
       coachingFocusRef.current = { key: activeIssue.key, resolvedAt: null, cue: activeIssue.cue };
-      renderAnalysisCue(activeIssue.cue);
+      renderAnalysisCue(activeIssue.cue, formKey(activeIssue.key));
       return;
     }
 
@@ -797,7 +836,7 @@ export default function App() {
       const nextIssue = issues[0];
       if (nextIssue) {
         coachingFocusRef.current = { key: nextIssue.key, resolvedAt: null, cue: nextIssue.cue };
-        renderAnalysisCue(nextIssue.cue);
+        renderAnalysisCue(nextIssue.cue, formKey(nextIssue.key));
       }
       return;
     }
@@ -814,14 +853,11 @@ export default function App() {
     const nextIssue = issues[0];
     if (nextIssue) {
       coachingFocusRef.current = { key: nextIssue.key, resolvedAt: null, cue: nextIssue.cue };
-      renderAnalysisCue(nextIssue.cue);
+      renderAnalysisCue(nextIssue.cue, formKey(nextIssue.key));
       return;
     }
 
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
-    if (modeAllowsVisuals) {
-      setCurrentCue('Looking good!');
-    }
   };
 
   const finishRep = (analysisFrame: PoseAnalysis) => {
@@ -832,6 +868,7 @@ export default function App() {
     const rep = finalizeRep(accumulator, analysisFrame, nextRepIndex);
     if (!rep) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
+    rep.feedbackMode = feedbackModeRef.current;
     if (attempt) {
       rep.attempt = attempt;
       attemptRepCountRef.current[attempt] += 1;
@@ -846,36 +883,54 @@ export default function App() {
         ...rep.notes,
       ].join(' • '),
     );
-    const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
-    if (currentModeAllowsAudio && audioUnlockedRef.current) {
-      repSpeechLockUntilRef.current = Date.now() + 900;
-      if (spokenCoachingEnabledRef.current) {
-        const band = rep.score < 50 ? 'low' : rep.score <= 65 ? 'mid' : 'high';
-        const phrasePool = repEncouragements[band];
-        const phrase = phrasePool[repEncouragementTickRef.current % phrasePool.length];
-        repEncouragementTickRef.current += 1;
-        speak(phrase);
-      } else {
-        speak(`Rep ${attempt ? attemptRepCountRef.current[attempt] : nextRepIndex}`);
+    const nextTrialState = attempt ? trialStateAfterRep(coachingTrialStateRef.current, attemptRepCountRef.current[attempt]) : coachingTrialStateRef.current;
+    const setFinished = nextTrialState !== coachingTrialStateRef.current;
+    const allows = currentModeAllows();
+    const canSpeak = allows.audio && audioUnlockedRef.current;
+
+    // A set's last rep goes straight to the wrap-up; a correction can't be used once the set is over.
+    if (feedbackModeRef.current !== 'control' && !setFinished) {
+      const feedback = repFeedback(feedbackMemoryRef.current, rep);
+      feedbackMemoryRef.current = feedback.memory;
+      if (feedback.text && allows.visuals) holdCue(feedback.text);
+      if (canSpeak) {
+        repSpeechLockUntilRef.current = Date.now() + 3000;
+        if (spokenCoachingEnabledRef.current) {
+          if (feedback.text) {
+            spokenFormCueRef.current = { key: feedback.key === 'neutral' ? null : feedback.key, at: Date.now() };
+            pushLog('cue', feedback.text);
+            speak(feedback.text);
+          }
+        } else {
+          speak(`Rep ${attempt ? attemptRepCountRef.current[attempt] : nextRepIndex}`);
+        }
       }
     }
 
-    if (!attempt) return;
-    const nextTrialState = trialStateAfterRep(coachingTrialStateRef.current, attemptRepCountRef.current[attempt]);
-    if (nextTrialState === coachingTrialStateRef.current) return;
+    if (!attempt || !setFinished) return;
     setTrialState(nextTrialState);
     setPaused(true);
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    feedbackMemoryRef.current = createFeedbackMemory();
     if (nextTrialState === 'between-attempts') {
       const startedAt = Date.now();
       setRestStartedAt(startedAt);
       setRestNow(startedAt);
       setRestBypassed(false);
       pushLog('system', `Set 1 complete. ${formatRestClock(REST_BREAK_MS)} rest before set 2.`);
-      setCurrentCue('Set 1 done! Rest for 2 minutes and review your focus for set 2.');
+      holdCue('Set 1 done — nice work! Rest 2 minutes and watch the ideal form.', 6000);
+      const breakMode = feedbackModeFor(feedbackSettingRef.current, workflowModeRef.current, 'between-attempts');
+      if (currentModeAllows(breakMode).audio && audioUnlockedRef.current) {
+        speak(SET_ONE_WRAP_UP);
+      }
     } else {
-      pushLog('system', 'Set 2 complete.');
-      setCurrentCue('Session complete!');
+      const setAverage = (reps: SessionRep[]) => summarizeReps(reps).average;
+      const set1Average = setAverage(sessionReps.filter((item) => item.attempt === 1));
+      const set2Average = setAverage([rep, ...sessionReps.filter((item) => item.attempt === 2)]);
+      const wrapUp = sessionWrapUp(set2Average - set1Average);
+      pushLog('system', `Set 2 complete. Set 1 ${set1Average} → set 2 ${set2Average}.`);
+      holdCue(wrapUp, 6000);
+      if (canSpeak) speak(wrapUp);
     }
   };
 
@@ -917,12 +972,22 @@ export default function App() {
       state.bottomStableFrames = 0;
     }
 
+    const stalledShort = state.sawBottom && elbowAngle >= LOCKOUT_STALL_MIN_ANGLE && elbowAngle < topThreshold;
+    state.stallSince = stalledShort ? state.stallSince || now : 0;
+    if (stalledShort && !state.lockoutCued && now - state.stallSince >= LOCKOUT_STALL_MS && feedbackModeRef.current !== 'control') {
+      state.lockoutCued = true;
+      if (currentModeAllows().visuals) holdCue(CORRECTIVE_LINES.lockout[0], 2000);
+      speakFormCue('lockout');
+    }
+
     if (state.sawBottom && state.topStableFrames >= 3 && now - state.lastRepAt > 550) {
       state.lastRepAt = now;
       state.sawTop = false;
       state.sawBottom = false;
       state.topStableFrames = 0;
       state.bottomStableFrames = 0;
+      state.stallSince = 0;
+      state.lockoutCued = false;
       finishRep(frame);
     }
   };
@@ -1215,17 +1280,28 @@ export default function App() {
 
   const buildUploadRow = () => {
     const mode = workflowMode === 'coaching' ? 'coaching_session' : 'free_practice';
+    const coaching = mode === 'coaching_session';
+    const setFeedback = (reps: SessionRep[], trialState: CoachingTrialState) =>
+      reps.find((rep) => rep.feedbackMode)?.feedbackMode ?? feedbackModeFor(feedbackSetting, workflowMode, trialState);
+    const set1Feedback = coaching ? setFeedback(set1Reps, 'attempt-1') : setFeedback(orderedReps, 'idle');
+    const set2Feedback = coaching ? setFeedback(set2Reps, 'attempt-2') : '';
+    const cameraLabel = cameraViewLabel(orderedReps[0]?.viewMode ?? cameraView);
+    const protocol = `[set1=${set1Feedback}${set2Feedback ? ` set2=${set2Feedback}` : ''} camera=${cameraLabel}]`;
     const notesSummary = [...new Set([...focusLines, ...sessionReps.flatMap((rep) => rep.notes)])].slice(0, 6).join('; ');
     return {
       timestamp: nowIso(),
       volunteer_name: athleteName.trim() || 'Anonymous',
       mode,
-      attempt1_score: mode === 'coaching_session' ? set1Summary.average || '' : overallSummary.average,
-      attempt2_score: mode === 'coaching_session' ? set2Summary.average || '' : '',
-      delta: mode === 'coaching_session' && coachingComplete ? set2Summary.average - set1Summary.average : '',
+      attempt1_score: coaching ? set1Summary.average || '' : overallSummary.average,
+      attempt2_score: coaching ? set2Summary.average || '' : '',
+      delta: coaching && coachingComplete ? set2Summary.average - set1Summary.average : '',
       reps: overallSummary.count,
-      notes_summary: notesSummary,
+      // Also in the notes so sheets on the previous Apps Script version still record the protocol.
+      notes_summary: `${protocol} ${notesSummary}`.trim(),
       device_user_agent: navigator.userAgent.slice(0, 120),
+      set1_feedback: set1Feedback,
+      set2_feedback: set2Feedback,
+      camera_view: cameraLabel,
     };
   };
 
@@ -1771,10 +1847,11 @@ export default function App() {
               onNameChange={setAthleteName}
               workflowMode={workflowMode}
               onWorkflowModeChange={setWorkflowMode}
-              feedbackMode={feedbackMode}
-              onFeedbackModeChange={setFeedbackMode}
-              spokenCoaching={spokenCoachingEnabled}
-              onSpokenCoachingChange={setSpokenCoachingEnabled}
+              adminUnlocked={adminUnlocked}
+              feedbackSetting={feedbackSetting}
+              onFeedbackSettingChange={setFeedbackSetting}
+              spokenCoaching={spokenTipsSwitch}
+              onSpokenCoachingChange={setSpokenTipsSwitch}
               cameraFacing={cameraFacing}
               onCameraFacingChange={setCameraFacing}
               cameraView={cameraView}
@@ -1820,8 +1897,9 @@ export default function App() {
               metrics={liveMetrics}
               visualsAllowed={modeAllowsVisuals}
               spokenCoaching={spokenCoachingEnabled}
-              onSpokenCoachingChange={setSpokenCoachingEnabled}
+              onSpokenCoachingChange={setSpokenTipsSwitch}
               audioAllowed={modeAllowsAudio}
+              showSpokenSwitch={adminUnlocked && feedbackSetting !== 'study'}
             />
           ) : null}
 

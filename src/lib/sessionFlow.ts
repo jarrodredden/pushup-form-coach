@@ -1,5 +1,5 @@
 import { FOCUS_LINES, HIP_BIAS_MIN, rankCoachingTips } from './coaching';
-import type { CameraViewMode } from './types';
+import type { CameraViewMode, FeedbackMode } from './types';
 
 export const REPS_PER_SET = 5;
 /** Mandatory rest between coaching sets so set 2 isn't skewed by fatigue. */
@@ -25,6 +25,25 @@ export type JourneyPhase = 'setup' | 'calibrating' | 'countdown' | 'set' | 'brea
 export interface JourneyStep {
   key: string;
   label: string;
+}
+
+/** 'study' is the volunteer protocol; Admin can pin one mode for every set when testing. */
+export type FeedbackSetting = 'study' | FeedbackMode;
+
+/**
+ * Study protocol: set 1 is the no-coaching control (rep counting only); the rest break and set 2
+ * get combined audio + visual coaching. Free practice is always coached.
+ */
+export function feedbackModeFor(setting: FeedbackSetting, workflowMode: WorkflowMode, trialState: CoachingTrialState): FeedbackMode {
+  if (setting !== 'study') return setting;
+  if (workflowMode !== 'coaching') return 'combined';
+  return trialState === 'idle' || trialState === 'attempt-1' ? 'control' : 'combined';
+}
+
+/** Spoken form tips follow the protocol in study mode, and the Admin switch otherwise. */
+export function spokenTipsFor(setting: FeedbackSetting, mode: FeedbackMode, adminSwitch: boolean) {
+  if (setting === 'study') return mode === 'audio' || mode === 'combined';
+  return adminSwitch;
 }
 
 export function attemptForTrialState(state: CoachingTrialState): 0 | 1 | 2 {

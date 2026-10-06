@@ -1,12 +1,13 @@
-import type { WorkflowMode } from '../lib/sessionFlow';
-import type { CameraFacing, CameraViewMode, FeedbackMode } from '../lib/types';
+import type { FeedbackSetting, WorkflowMode } from '../lib/sessionFlow';
+import type { CameraFacing, CameraViewMode } from '../lib/types';
 import { CheckIcon, DownloadIcon, PenIcon, RetryIcon, SpeakerIcon } from './Icons';
 
-const feedbackModes: Array<{ value: FeedbackMode; label: string; detail: string }> = [
-  { value: 'control', label: 'Control', detail: 'No live feedback — camera and rep count only.' },
-  { value: 'visual', label: 'Visual', detail: 'Skeleton overlay and on-screen form cues.' },
-  { value: 'audio', label: 'Audio', detail: 'Spoken countdown and rep counts, no skeleton.' },
-  { value: 'combined', label: 'Combined', detail: 'On-screen cues plus spoken audio.' },
+const feedbackSettings: Array<{ value: FeedbackSetting; label: string; detail: string }> = [
+  { value: 'study', label: 'Volunteer', detail: 'Volunteer default: set 1 is control (no coaching), set 2 gets combined audio + visual coaching.' },
+  { value: 'control', label: 'Control', detail: 'Both sets: no live feedback — camera and rep count only.' },
+  { value: 'visual', label: 'Visual', detail: 'Both sets: skeleton overlay and on-screen form cues.' },
+  { value: 'audio', label: 'Audio', detail: 'Both sets: spoken countdown and cues, no skeleton.' },
+  { value: 'combined', label: 'Combined', detail: 'Both sets: on-screen cues plus spoken audio.' },
 ];
 
 interface SetupPanelProps {
@@ -14,8 +15,9 @@ interface SetupPanelProps {
   onNameChange: (value: string) => void;
   workflowMode: WorkflowMode;
   onWorkflowModeChange: (mode: WorkflowMode) => void;
-  feedbackMode: FeedbackMode;
-  onFeedbackModeChange: (mode: FeedbackMode) => void;
+  adminUnlocked: boolean;
+  feedbackSetting: FeedbackSetting;
+  onFeedbackSettingChange: (setting: FeedbackSetting) => void;
   spokenCoaching: boolean;
   onSpokenCoachingChange: (value: boolean) => void;
   cameraFacing: CameraFacing;
@@ -123,8 +125,8 @@ function PlacementGuide({ view }: { view: CameraViewMode }) {
 }
 
 export function SetupPanel(props: SetupPanelProps) {
-  const selectedMode = feedbackModes.find((mode) => mode.value === props.feedbackMode);
-  const audioAllowed = props.feedbackMode === 'audio' || props.feedbackMode === 'combined';
+  const selectedSetting = feedbackSettings.find((setting) => setting.value === props.feedbackSetting);
+  const audioAllowed = props.feedbackSetting === 'audio' || props.feedbackSetting === 'combined';
 
   return (
     <div className="setup">
@@ -176,31 +178,37 @@ export function SetupPanel(props: SetupPanelProps) {
         </div>
       </section>
 
-      <section className="card">
-        <h2 className="card__title">Feedback mode</h2>
-        <div className="segmented" role="radiogroup" aria-label="Feedback mode">
-          {feedbackModes.map((mode) => (
-            <button
-              key={mode.value}
-              role="radio"
-              aria-checked={props.feedbackMode === mode.value}
-              className={props.feedbackMode === mode.value ? 'segmented__item is-active' : 'segmented__item'}
-              onClick={() => props.onFeedbackModeChange(mode.value)}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
-        <p className="field__hint">{selectedMode?.detail}</p>
-        <SpokenTipsSwitch checked={props.spokenCoaching} onChange={props.onSpokenCoachingChange} disabled={!audioAllowed} />
-      </section>
+      {props.adminUnlocked ? (
+        <section className="card card--admin">
+          <h2 className="card__title">
+            Feedback mode <span className="admin-tag">Admin</span>
+          </h2>
+          <div className="segmented segmented--wrap" role="radiogroup" aria-label="Feedback mode">
+            {feedbackSettings.map((setting) => (
+              <button
+                key={setting.value}
+                role="radio"
+                aria-checked={props.feedbackSetting === setting.value}
+                className={props.feedbackSetting === setting.value ? 'segmented__item is-active' : 'segmented__item'}
+                onClick={() => props.onFeedbackSettingChange(setting.value)}
+              >
+                {setting.label}
+              </button>
+            ))}
+          </div>
+          <p className="field__hint">{selectedSetting?.detail}</p>
+          {props.feedbackSetting !== 'study' ? (
+            <SpokenTipsSwitch checked={props.spokenCoaching} onChange={props.onSpokenCoachingChange} disabled={!audioAllowed} />
+          ) : null}
+        </section>
+      ) : null}
 
       <details className="card disclosure">
         <summary>
           <span>
             <strong>Camera setup</strong>
             <span className="disclosure__meta">
-              {props.cameraFacing === 'user' ? 'Front camera' : 'Back camera'} · {props.cameraView === 'head-on' ? 'Head-on' : 'Side'} view
+              {props.cameraFacing === 'user' ? 'Front camera' : 'Back camera'} · {props.cameraView === 'head-on' ? 'Head-on (front)' : 'Side'} view
             </span>
           </span>
         </summary>
@@ -218,19 +226,21 @@ export function SetupPanel(props: SetupPanelProps) {
               </button>
             ))}
           </div>
-          <div className="segmented" role="radiogroup" aria-label="Camera view">
-            {(['head-on', 'side'] as const).map((view) => (
-              <button
-                key={view}
-                role="radio"
-                aria-checked={props.cameraView === view}
-                className={props.cameraView === view ? 'segmented__item is-active' : 'segmented__item'}
-                onClick={() => props.onCameraViewChange(view)}
-              >
-                {view === 'head-on' ? 'Head-on' : 'Side'}
-              </button>
-            ))}
-          </div>
+          {props.adminUnlocked ? (
+            <div className="segmented" role="radiogroup" aria-label="Camera view (admin)">
+              {(['head-on', 'side'] as const).map((view) => (
+                <button
+                  key={view}
+                  role="radio"
+                  aria-checked={props.cameraView === view}
+                  className={props.cameraView === view ? 'segmented__item is-active' : 'segmented__item'}
+                  onClick={() => props.onCameraViewChange(view)}
+                >
+                  {view === 'head-on' ? 'Head-on' : 'Side'}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <PlacementGuide view={props.cameraView} />
           <p className="field__hint">
             {props.cameraView === 'head-on'

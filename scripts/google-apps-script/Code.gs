@@ -2,12 +2,37 @@ const SPREADSHEET_ID = '1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es';
 const SHEET_NAME = 'Results';
 const CONSENT_SHEET_NAME = 'Consents';
 
+const RESULT_COLUMNS = [
+  'timestamp',
+  'volunteer_name',
+  'mode',
+  'attempt1_score',
+  'attempt2_score',
+  'delta',
+  'reps',
+  'notes_summary',
+  'device_user_agent',
+  'set1_feedback',
+  'set2_feedback',
+  'camera_view',
+];
+
+// Writes by header name. Columns missing from an existing sheet are added at the right, so older
+// rows keep their layout and new fields land under their own headers.
 function ensureSheet_(spreadsheet) {
   const sheet = spreadsheet.getSheetByName(SHEET_NAME) || spreadsheet.insertSheet(SHEET_NAME);
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['timestamp', 'volunteer_name', 'mode', 'attempt1_score', 'attempt2_score', 'delta', 'reps', 'notes_summary', 'device_user_agent']);
+    sheet.appendRow(RESULT_COLUMNS);
+    return { sheet: sheet, headers: RESULT_COLUMNS.slice() };
   }
-  return sheet;
+  const width = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, width).getValues()[0].map(String);
+  const missing = RESULT_COLUMNS.filter((name) => headers.indexOf(name) === -1);
+  if (missing.length) {
+    sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+    missing.forEach((name) => headers.push(name));
+  }
+  return { sheet: sheet, headers: headers };
 }
 
 function ensureConsentSheet_(spreadsheet) {
@@ -72,18 +97,14 @@ function doPost(e) {
       return json_(saveConsentPdf_(payload));
     }
     const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const sheet = ensureSheet_(spreadsheet);
-    sheet.appendRow([
-      payload.timestamp || '',
-      payload.volunteer_name || '',
-      payload.mode || '',
-      payload.attempt1_score ?? '',
-      payload.attempt2_score ?? '',
-      payload.delta ?? '',
-      payload.reps ?? '',
-      payload.notes_summary || '',
-      payload.device_user_agent || '',
-    ]);
+    const lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+    try {
+      const target = ensureSheet_(spreadsheet);
+      target.sheet.appendRow(target.headers.map((name) => (payload[name] === undefined || payload[name] === null ? '' : payload[name])));
+    } finally {
+      lock.releaseLock();
+    }
     return json_({ ok: true });
   } catch (error) {
     return json_({ ok: false, error: String(error) });

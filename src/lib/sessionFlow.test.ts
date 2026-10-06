@@ -5,8 +5,10 @@ import {
   attemptForTrialState,
   coachingFocusLines,
   deriveJourneyPhase,
+  feedbackModeFor,
   formatRestClock,
   journeySteps,
+  spokenTipsFor,
   REPS_PER_SET,
   REST_BREAK_MS,
   restRemainingMs,
@@ -124,5 +126,26 @@ describe('coaching session flow', () => {
       expect(keys.indexOf('consent')).toBe(keys.indexOf('setup') + 1);
       expect(keys.indexOf('calibrating')).toBe(keys.indexOf('consent') + 1);
     }
+  });
+});
+
+describe('volunteer feedback protocol', () => {
+  it('runs set 1 as control and the break and set 2 as combined coaching', () => {
+    expect(feedbackModeFor('study', 'coaching', 'idle')).toBe('control');
+    expect(feedbackModeFor('study', 'coaching', 'attempt-1')).toBe('control');
+    expect(feedbackModeFor('study', 'coaching', 'between-attempts')).toBe('combined');
+    expect(feedbackModeFor('study', 'coaching', 'attempt-2')).toBe('combined');
+    expect(feedbackModeFor('study', 'free', 'idle')).toBe('combined');
+  });
+
+  it('turns spoken tips on only for the coached set in the protocol', () => {
+    expect(spokenTipsFor('study', 'control', true)).toBe(false);
+    expect(spokenTipsFor('study', 'combined', false)).toBe(true);
+  });
+
+  it('lets an Admin pin one mode for both sets', () => {
+    expect(feedbackModeFor('visual', 'coaching', 'attempt-1')).toBe('visual');
+    expect(feedbackModeFor('visual', 'coaching', 'attempt-2')).toBe('visual');
+    expect(spokenTipsFor('audio', 'audio', false)).toBe(false);
   });
 });

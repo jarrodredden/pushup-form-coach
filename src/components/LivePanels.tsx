@@ -86,6 +86,7 @@ export function BreakPanel({
   spokenCoaching,
   onSpokenCoachingChange,
   audioAllowed,
+  showSpokenSwitch,
 }: {
   restRemainingMs: number;
   restTotalMs: number;
@@ -99,6 +100,8 @@ export function BreakPanel({
   spokenCoaching: boolean;
   onSpokenCoachingChange: (value: boolean) => void;
   audioAllowed: boolean;
+  /** Admin-only: volunteers follow the study protocol and can't change feedback. */
+  showSpokenSwitch: boolean;
 }) {
   const resting = restRemainingMs > 0;
   const restProgress = restTotalMs > 0 ? Math.min(1, Math.max(0, 1 - restRemainingMs / restTotalMs)) : 1;
@@ -157,9 +160,11 @@ export function BreakPanel({
           </div>
         </section>
       ) : null}
-      <section className="card">
-        <SpokenTipsSwitch checked={spokenCoaching} onChange={onSpokenCoachingChange} disabled={!audioAllowed} />
-      </section>
+      {showSpokenSwitch ? (
+        <section className="card card--admin">
+          <SpokenTipsSwitch checked={spokenCoaching} onChange={onSpokenCoachingChange} disabled={!audioAllowed} />
+        </section>
+      ) : null}
     </>
   );
 }

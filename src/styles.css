@@ -461,6 +461,21 @@ h1, h2, h3, p { margin: 0; }
   transition: background 150ms ease, color 150ms ease;
 }
 .segmented__item.is-active { background: var(--surface-3); color: var(--text); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+.segmented--wrap { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); }
+
+.card--admin { border: 1px dashed rgba(200, 255, 61, 0.35); }
+.admin-tag {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  vertical-align: middle;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--volt-ink);
+  background: var(--volt);
+}
 
 .switch-row {
   display: grid;
