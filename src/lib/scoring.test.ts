@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { LIVE_CUES } from './coaching';
 import { addRepFrame, analyzePose, BOTTOM_WINDOW_DEGREES, createEmptyRepAccumulator, finalizeRep, REP_BOTTOM_ANGLE } from './scoring';
+import { updatePlankReference } from './plankLine';
+import { modelLandmarks } from './poseFixtures';
 import { PoseAnalysis, PosePoint } from './types';
 
 function makeGoodPose(): PosePoint[] {
@@ -49,19 +51,37 @@ describe('push-up scoring', () => {
   });
 
   it('reads low hips as sagging and high hips as piking from the head-on view', () => {
-    const sagging = analyzePose(makeBadPose(), 'head-on');
+    const plankReference = updatePlankReference({}, modelLandmarks(), 0.75);
+    const sagging = analyzePose(modelLandmarks({ depth: 1, hipDrop: 0.14 }), 'head-on', { plankReference });
     expect(sagging.hipBias).toBeGreaterThan(0);
     expect(sagging.notes).toContain(LIVE_CUES.hipSag);
     expect(sagging.notes).not.toContain(LIVE_CUES.hipPike);
 
-    const pikedPoints = makeGoodPose();
-    pikedPoints[23] = { x: 0.42, y: 0.4, visibility: 1 };
-    pikedPoints[24] = { x: 0.58, y: 0.4, visibility: 1 };
-    const piking = analyzePose(pikedPoints, 'head-on');
+    const piking = analyzePose(modelLandmarks({ depth: 1, hipDrop: -0.14 }), 'head-on', { plankReference });
     expect(piking.hipBias).toBeLessThan(0);
     expect(piking.notes).toContain(LIVE_CUES.hipPike);
     expect(piking.notes).not.toContain(LIVE_CUES.hipSag);
     expect(piking.notes.join(' ')).not.toMatch(/hips lower/i);
+  });
+
+  it('does not call a straight head-on plank a pike, even before calibration', () => {
+    for (const plankReference of [undefined, updatePlankReference({}, modelLandmarks(), 0.75)]) {
+      for (const depth of [0, 0.5, 1]) {
+        const frame = analyzePose(modelLandmarks({ depth }), 'head-on', { plankReference });
+        expect(frame.bodyLineScore).toBeGreaterThanOrEqual(85);
+        expect(frame.notes).not.toContain(LIVE_CUES.hipPike);
+        expect(frame.notes).not.toContain(LIVE_CUES.hipSag);
+      }
+    }
+  });
+
+  it('gives a tucked head-on rep full elbow credit', () => {
+    for (const tuckDegrees of [15, 30, 45]) {
+      const frame = analyzePose(modelLandmarks({ depth: 1, tuckDegrees }), 'head-on');
+      expect(frame.elbowFlareScore).toBe(100);
+    }
+    // ~82° of true abduction: the flared "T".
+    expect(analyzePose(modelLandmarks({ depth: 1, tuckDegrees: 100 }), 'head-on').elbowFlareScore).toBeLessThan(40);
   });
 });
 
@@ -73,7 +93,11 @@ function frameAt(elbowAngle: number, overrides: Partial<PoseAnalysis> = {}): Pos
     elbowAngle,
     elbowDepthScore: depth,
     bodyLineScore: 90,
+    plankRaw: 0,
+    plankMethod: 'front-hips',
+    plankDetail: null,
     elbowFlareScore: 90,
+    elbowAbduction: 40,
     handStackScore: 90,
     headAlignmentScore: 90,
     framingScore: 90,

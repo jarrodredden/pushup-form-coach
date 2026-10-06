@@ -1,4 +1,6 @@
 import { hipDirection, LIVE_CUES, weightedRepScore } from './coaching';
+import { elbowTuckScore, headOnElbowAbduction, median, worldElbowAbduction } from './elbowTuck';
+import { measureFrontPlank, measureSidePlank, plankMethodLabel, type PlankReference } from './plankLine';
 import { CameraViewMode, PoseAnalysis, PosePoint, RepAccumulator, RepFrameSample, SessionRep } from './types';
 
 export const MIN_SIGNAL = 0.45;
@@ -9,6 +11,7 @@ export const BOTTOM_WINDOW_DEGREES = 12;
 const MAX_BOTTOM_FRAMES = 240;
 
 const REQUIRED = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28] as const;
+const REQUIRED_HEAD_ON = [11, 12, 13, 14, 15, 16] as const;
 const LEFT = { shoulder: 11, elbow: 13, wrist: 15, hip: 23, knee: 25, ankle: 27 };
 const RIGHT = { shoulder: 12, elbow: 14, wrist: 16, hip: 24, knee: 26, ankle: 28 };
 
@@ -36,12 +39,24 @@ const averageVisibility = (landmarks: PosePoint[] | undefined, indices: readonly
 };
 const mean = (...values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
 const scoreLine = (offset: number, scale: number) => clamp(100 - offset * scale, 0, 100);
-const bodyLineY = (shoulderMid: PosePoint, hipMid: PosePoint, ankleMid: PosePoint) =>
-  shoulderMid.y + ((hipMid.x - shoulderMid.x) * (ankleMid.y - shoulderMid.y)) / Math.max(ankleMid.x - shoulderMid.x, 0.05);
+
+const ELBOW_NOTE: Record<CameraViewMode, { below: number; text: string }> = {
+  'head-on': { below: 68, text: 'Tuck the elbows in a bit more from the front view.' },
+  side: { below: 74, text: 'Tuck the elbows a little more.' },
+};
+const CLEAN_NOTE: Record<CameraViewMode, string> = { 'head-on': 'Clean head-on rep.', side: 'Clean side-view rep.' };
+
+/** Re-derives the elbow note after the live elbow score is smoothed or re-graded on a saved range. */
+export function withElbowNote(notes: string[], viewMode: CameraViewMode, elbowFlareScore: number) {
+  const { below, text } = ELBOW_NOTE[viewMode];
+  const others = notes.filter((note) => note !== text && note !== CLEAN_NOTE[viewMode]);
+  const next = elbowFlareScore < below ? [...others, text] : others;
+  return next.length ? next : [CLEAN_NOTE[viewMode]];
+}
 
 function buildHeadOnNotes(metrics: {
   elbowDepthScore: number;
-  bodyLineScore: number;
+  bodyLineScore: number | null;
   elbowFlareScore: number;
   handStackScore: number;
   headAlignmentScore: number;
@@ -53,22 +68,22 @@ function buildHeadOnNotes(metrics: {
   if (metrics.setupHint) notes.push(metrics.setupHint);
   // Front-view coaching is intentionally softer so depth and flare stay achievable on a phone camera.
   if (metrics.elbowDepthScore < 55) notes.push(LIVE_CUES.depth);
-  if (metrics.bodyLineScore < 74) {
+  if (metrics.bodyLineScore !== null && metrics.bodyLineScore < 74) {
     const direction = hipDirection(metrics.hipBias);
     if (direction !== 'sag') notes.push(LIVE_CUES.hipPike);
     if (direction !== 'pike') notes.push(LIVE_CUES.hipSag);
   }
-  if (metrics.elbowFlareScore < 68) notes.push('Tuck the elbows in a bit more from the front view.');
+  if (metrics.elbowFlareScore < ELBOW_NOTE['head-on'].below) notes.push(ELBOW_NOTE['head-on'].text);
   if (metrics.handStackScore < 74) notes.push('Stack the hands under the shoulders.');
   if (metrics.headAlignmentScore < 72) notes.push('Keep the head centered between the shoulders.');
   if (metrics.framingScore < 70 && !metrics.setupHint) notes.push('Back up or lower the phone until hands, torso, and head stay in frame.');
-  if (!notes.length) notes.push('Clean head-on rep.');
+  if (!notes.length) notes.push(CLEAN_NOTE['head-on']);
   return notes;
 }
 
 function buildSideNotes(metrics: {
   elbowDepthScore: number;
-  bodyLineScore: number;
+  bodyLineScore: number | null;
   hipSagScore: number | null;
   hipPikeScore: number | null;
   handStackScore: number;
@@ -81,8 +96,8 @@ function buildSideNotes(metrics: {
   if ((metrics.hipSagScore ?? 100) < 74) notes.push(LIVE_CUES.hipSag);
   if ((metrics.hipPikeScore ?? 100) < 74) notes.push(LIVE_CUES.hipPike);
   if (metrics.handStackScore < 74) notes.push('Keep hands stacked under the shoulders.');
-  if (metrics.elbowFlareScore < 74) notes.push('Tuck the elbows a little more.');
-  if (!notes.length) notes.push('Clean side-view rep.');
+  if (metrics.elbowFlareScore < ELBOW_NOTE.side.below) notes.push(ELBOW_NOTE.side.text);
+  if (!notes.length) notes.push(CLEAN_NOTE.side);
   return notes;
 }
 
@@ -103,8 +118,49 @@ function framingHint(landmarks: PosePoint[] | undefined, viewMode: CameraViewMod
   return null;
 }
 
-export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: CameraViewMode = 'head-on'): PoseAnalysis {
-  const confidence = averageVisibility(landmarks, REQUIRED);
+const ELBOW_VISIBLE = 0.5;
+
+/** Mean of the arms the camera can actually see; null when neither elbow is readable. */
+function elbowAbductionForView(
+  landmarks: PosePoint[],
+  worldLandmarks: PosePoint[] | undefined,
+  viewMode: CameraViewMode,
+  shoulderWidth: number,
+): number | null {
+  const sides = [
+    { shoulder: LEFT.shoulder, elbow: LEFT.elbow, other: RIGHT.shoulder },
+    { shoulder: RIGHT.shoulder, elbow: RIGHT.elbow, other: LEFT.shoulder },
+  ].filter((side) => (landmarks[side.elbow]?.visibility ?? 0) >= ELBOW_VISIBLE);
+  const readings = sides
+    .map((side) => {
+      if (viewMode === 'head-on') {
+        return headOnElbowAbduction(landmarks[side.shoulder], landmarks[side.elbow], landmarks[side.other], shoulderWidth);
+      }
+      if (!worldLandmarks?.length) return null;
+      const shoulderMid = midpoint(worldLandmarks[LEFT.shoulder], worldLandmarks[RIGHT.shoulder]);
+      const hipMid = midpoint(worldLandmarks[LEFT.hip], worldLandmarks[RIGHT.hip]);
+      return worldElbowAbduction(worldLandmarks[side.shoulder], worldLandmarks[side.elbow], worldLandmarks[side.other], shoulderMid, hipMid);
+    })
+    .filter((value): value is number => value !== null);
+  return readings.length ? mean(...readings) : null;
+}
+
+export interface AnalyzeOptions {
+  worldLandmarks?: PosePoint[];
+  /** Video width / height. Landmark x is normalized by width and y by height, so geometry needs it. */
+  aspect?: number;
+  /** The athlete's own top-of-rep plank, for the front-view plank line. */
+  plankReference?: PlankReference | null;
+}
+
+export function analyzePose(
+  landmarks: PosePoint[] | undefined,
+  viewMode: CameraViewMode = 'head-on',
+  options: AnalyzeOptions = {},
+): PoseAnalysis {
+  const { worldLandmarks, aspect = 0.75, plankReference } = options;
+  // Front view only needs the upper body; knees and ankles are usually out of frame from there.
+  const confidence = averageVisibility(landmarks, viewMode === 'head-on' ? REQUIRED_HEAD_ON : REQUIRED);
   if (!landmarks?.length || confidence < MIN_SIGNAL) {
     const setupHint = viewMode === 'head-on'
       ? 'Move back until hands, torso, and head are visible.'
@@ -114,8 +170,12 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       overallScore: 0,
       elbowAngle: 180,
       elbowDepthScore: 0,
-      bodyLineScore: 0,
+      bodyLineScore: null,
+      plankRaw: null,
+      plankMethod: null,
+      plankDetail: null,
       elbowFlareScore: 0,
+      elbowAbduction: null,
       handStackScore: 0,
       headAlignmentScore: 0,
       framingScore: 0,
@@ -135,29 +195,19 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
   const rElbow = point(landmarks, RIGHT.elbow)!;
   const lWrist = point(landmarks, LEFT.wrist)!;
   const rWrist = point(landmarks, RIGHT.wrist)!;
-  const lHip = point(landmarks, LEFT.hip)!;
-  const rHip = point(landmarks, RIGHT.hip)!;
-  const lAnkle = point(landmarks, LEFT.ankle)!;
-  const rAnkle = point(landmarks, RIGHT.ankle)!;
   const nose = point(landmarks, 0);
 
   const shoulderMid = midpoint(lShoulder, rShoulder);
-  const hipMid = midpoint(lHip, rHip);
-  const ankleMid = midpoint(lAnkle, rAnkle);
   const wristMid = midpoint(lWrist, rWrist);
   const shoulderWidth = Math.max(distance(lShoulder, rShoulder), 0.001);
-  const torsoLength = Math.max(distance(shoulderMid, hipMid), 0.001);
   const headVisible = averageVisibility(landmarks, [0, 1, 2, 5, 7, 8]);
 
   const leftElbowAngle = angle(lShoulder, lElbow, lWrist);
   const rightElbowAngle = angle(rShoulder, rElbow, rWrist);
   const elbowAngle = mean(leftElbowAngle, rightElbowAngle);
   const elbowDepthScore = clamp(((160 - elbowAngle) / 75) * 100, 0, 100);
-  const elbowFlareOffset = mean(
-    Math.abs(lElbow.x - lShoulder.x) / shoulderWidth,
-    Math.abs(rElbow.x - rShoulder.x) / shoulderWidth,
-  );
-  const elbowFlareScore = scoreLine(elbowFlareOffset, 180);
+  const elbowAbduction = elbowAbductionForView(landmarks, worldLandmarks, viewMode, shoulderWidth);
+  const elbowFlareScore = elbowTuckScore(elbowAbduction);
   const handStackOffset = Math.abs(wristMid.x - shoulderMid.x) / shoulderWidth;
   const handStackScore = scoreLine(handStackOffset, 220);
   const headAlignmentScore = nose && (nose.visibility ?? 0) > 0.35
@@ -165,14 +215,7 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     : 55;
   const framingHintText = framingHint(landmarks, viewMode);
   const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
-  // Head-on proxy: hips sit about 1.4 shoulder-widths below the shoulders in the image.
-  // Hips lower than that read as sagging, higher as piking.
-  const headOnHipDeviation = (hipMid.y - shoulderMid.y) - shoulderWidth * 1.4;
-  const bodyLineProxyScore = clamp(
-    100 - Math.abs(headOnHipDeviation) / Math.max(shoulderWidth * 0.7, 0.02) * 100,
-    0,
-    100,
-  );
+  const plank = viewMode === 'head-on' ? measureFrontPlank(landmarks, aspect, plankReference) : measureSidePlank(landmarks, aspect);
   const framingScore = Math.round(
     clamp(
       (averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 0.55 + averageVisibility(landmarks, [LEFT.ankle, RIGHT.ankle]) * 0.45) * 100,
@@ -181,20 +224,19 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     ),
   );
 
+  const bodyLineScore = plank.score;
+  const hipBias = plank.bias;
+  const plankFields = { plankRaw: plank.raw, plankMethod: plank.method, plankDetail: plank.detail };
   let hipSagScore: number | null = null;
   let hipPikeScore: number | null = null;
-  let bodyLineScore = 0;
-  let hipBias = 0;
   let overallScore = 0;
   let notes: string[] = [];
 
   if (viewMode === 'side') {
-    const lineY = bodyLineY(shoulderMid, hipMid, ankleMid);
-    const hipDeviation = hipMid.y - lineY;
-    hipSagScore = clamp(100 - Math.max(0, hipDeviation / torsoLength) * 240, 0, 100);
-    hipPikeScore = clamp(100 - Math.max(0, -hipDeviation / torsoLength) * 240, 0, 100);
-    bodyLineScore = Math.round(((hipSagScore ?? 0) + (hipPikeScore ?? 0)) / 2);
-    hipBias = Math.round((100 - hipSagScore) - (100 - hipPikeScore));
+    if (bodyLineScore !== null) {
+      hipSagScore = hipBias > 0 ? bodyLineScore : 100;
+      hipPikeScore = hipBias < 0 ? bodyLineScore : 100;
+    }
     overallScore = weightedRepScore('side', {
       depth: elbowDepthScore,
       bodyLine: bodyLineScore,
@@ -212,8 +254,6 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       setupHint: framingHintText,
     });
   } else {
-    bodyLineScore = Math.round(bodyLineProxyScore);
-    hipBias = Math.round(Math.sign(headOnHipDeviation) * (100 - bodyLineProxyScore));
     const headOnFrameScore = clamp(
       averageVisibility(landmarks, [LEFT.wrist, RIGHT.wrist]) * 40 +
         averageVisibility(landmarks, [LEFT.shoulder, RIGHT.shoulder]) * 35 +
@@ -244,7 +284,9 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
       elbowAngle,
       elbowDepthScore: Math.round(elbowDepthScore),
       bodyLineScore,
+      ...plankFields,
       elbowFlareScore: Math.round(elbowFlareScore),
+      elbowAbduction: elbowAbduction === null ? null : Math.round(elbowAbduction),
       handStackScore: Math.round(handStackScore),
       headAlignmentScore: Math.round(headAlignmentScore),
       framingScore: Math.round(headOnFrameScore),
@@ -264,7 +306,9 @@ export function analyzePose(landmarks: PosePoint[] | undefined, viewMode: Camera
     elbowAngle,
     elbowDepthScore: Math.round(elbowDepthScore),
     bodyLineScore,
+    ...plankFields,
     elbowFlareScore: Math.round(elbowFlareScore),
+    elbowAbduction: elbowAbduction === null ? null : Math.round(elbowAbduction),
     handStackScore: Math.round(handStackScore),
     headAlignmentScore: Math.round(headAlignmentScore),
     framingScore,
@@ -287,7 +331,10 @@ function sampleFromFrame(frame: PoseAnalysis): RepFrameSample {
     elbowAngle: frame.elbowAngle,
     depth: frame.elbowDepthScore,
     bodyLine: frame.bodyLineScore,
+    plankRaw: frame.plankRaw,
+    plankMethod: frame.plankMethod,
     elbowFlare: frame.elbowFlareScore,
+    elbowAbduction: frame.elbowAbduction,
     headAlignment: frame.headAlignmentScore,
     framing: frame.framingScore,
     hipSag: frame.hipSagScore,
@@ -327,8 +374,15 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
   };
 
   const depth = pick((sample) => sample.depth);
-  const bodyLine = pick((sample) => sample.bodyLine);
-  const elbowFlare = pick((sample) => sample.elbowFlare);
+  const plankSamples = window.filter((sample) => sample.bodyLine !== null);
+  const bodyLine = median(plankSamples.map((sample) => sample.bodyLine as number));
+  const plankRaw = median(plankSamples.map((sample) => sample.plankRaw).filter((value): value is number => value !== null));
+  const plankMethod = plankSamples.length ? plankSamples[Math.floor(plankSamples.length / 2)].plankMethod : null;
+  // Median, not mean: one jittery elbow landmark shouldn't knock points off a tucked rep.
+  const elbowFlare = median(window.map((sample) => sample.elbowFlare)) ?? 100;
+  const elbowAbduction = median(
+    window.map((sample) => sample.elbowAbduction).filter((value): value is number => value !== null),
+  );
   const headAlignment = pick((sample) => sample.headAlignment);
   const handStack = pick((sample) => sample.handStack);
   const score = weightedRepScore(analysis.viewMode, { depth, bodyLine, elbowFlare, handStack, headAlignment });
@@ -339,8 +393,14 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
     score,
     notes: [...new Set(window.flatMap((sample) => sample.notes))].slice(0, 6),
     elbowDepthScore: Math.round(depth),
-    bodyLineScore: Math.round(bodyLine),
+    bodyLineScore: bodyLine === null ? null : Math.round(bodyLine),
+    plankMethod,
+    plankRaw: plankRaw === null ? null : Number(plankRaw.toFixed(plankMethod?.startsWith('side') ? 1 : 3)),
+    plankDebug: plankSamples.length
+      ? `${plankMethodLabel(plankMethod)} · raw ${plankRaw === null ? '–' : plankRaw.toFixed(plankMethod?.startsWith('side') ? 1 : 3)}${plankMethod?.startsWith('side') ? '° bend' : ' SW'} (+ sag / − pike) · ${plankSamples.length}/${window.length} bottom frames`
+      : `n/a · plank landmarks not visible in ${window.length} bottom frames`,
     elbowFlareScore: Math.round(elbowFlare),
+    elbowAbduction: elbowAbduction === null ? undefined : Math.round(elbowAbduction),
     handStackScore: Math.round(handStack),
     headAlignmentScore: Math.round(headAlignment),
     framingScore: Math.round(pick((sample) => sample.framing)),

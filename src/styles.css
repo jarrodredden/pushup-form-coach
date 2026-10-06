@@ -891,6 +891,11 @@ h1, h2, h3, p { margin: 0; }
 .log-item--rep { border-left-color: var(--volt); }
 .log-item--cue { border-left-color: #7dd3fc; }
 
+.plank-debug { display: grid; gap: 6px; margin-top: 6px; }
+.plank-debug__row { display: grid; gap: 2px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-3); }
+.plank-debug__row strong { font-size: 0.84rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.plank-debug__row span { font-size: 0.76rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+
 .history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .history-item { border-radius: var(--radius-md); background: var(--surface-2); }
 .history-item summary {

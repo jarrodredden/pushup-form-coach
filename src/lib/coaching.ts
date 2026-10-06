@@ -14,18 +14,22 @@ export const SCORE_WEIGHTS: Record<CameraViewMode, Record<CoachingMetricKey, num
   'head-on': { depth: 0.55, hips: 0.24, elbowFlare: 0.09, handStack: 0.07, headAlignment: 0.05 },
 };
 
+/** Weighted form score. A plank line the camera couldn't see (null) is left out and the rest re-weighted. */
 export function weightedRepScore(
   viewMode: CameraViewMode,
-  metrics: { depth: number; bodyLine: number; elbowFlare: number; handStack: number; headAlignment: number },
+  metrics: { depth: number; bodyLine: number | null; elbowFlare: number; handStack: number; headAlignment: number },
 ) {
   const weights = SCORE_WEIGHTS[viewMode];
-  return Math.round(
-    metrics.depth * weights.depth +
-      metrics.bodyLine * weights.hips +
-      metrics.elbowFlare * weights.elbowFlare +
-      metrics.handStack * weights.handStack +
-      metrics.headAlignment * weights.headAlignment,
-  );
+  const parts: Array<[number, number]> = [
+    [metrics.depth, weights.depth],
+    [metrics.elbowFlare, weights.elbowFlare],
+    [metrics.handStack, weights.handStack],
+    [metrics.headAlignment, weights.headAlignment],
+  ];
+  if (metrics.bodyLine !== null) parts.push([metrics.bodyLine, weights.hips]);
+  const totalWeight = parts.reduce((sum, [, weight]) => sum + weight, 0);
+  if (!totalWeight) return 0;
+  return Math.round(parts.reduce((sum, [score, weight]) => sum + score * weight, 0) / totalWeight);
 }
 
 export const LIVE_CUES: Record<Exclude<CoachingIssueKey, 'setup'>, string> = {
@@ -135,11 +139,14 @@ export function liveCoachingIssues(frame: PoseAnalysis, counting: boolean): Coac
 
   const pass = LIVE_PASS_LINES[frame.viewMode];
   const hipsNeedWork =
-    frame.bodyLineScore < pass.hips ||
-    (frame.viewMode === 'side' && ((frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72));
+    frame.bodyLineScore !== null &&
+    (frame.bodyLineScore < pass.hips ||
+      (frame.viewMode === 'side' && ((frame.hipSagScore ?? 100) < 72 || (frame.hipPikeScore ?? 100) < 72)));
   const metrics: TipMetric[] = [
     { key: 'depth', score: frame.elbowDepthScore, passLine: pass.depth },
-    { key: 'hips', score: frame.bodyLineScore, passLine: pass.hips, needsWork: hipsNeedWork },
+    ...(frame.bodyLineScore === null
+      ? []
+      : [{ key: 'hips' as const, score: frame.bodyLineScore, passLine: pass.hips, needsWork: hipsNeedWork }]),
     { key: 'elbowFlare', score: frame.elbowFlareScore, passLine: pass.elbowFlare },
     { key: 'handStack', score: frame.handStackScore, passLine: pass.handStack },
   ];

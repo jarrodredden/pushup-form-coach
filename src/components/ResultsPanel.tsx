@@ -1,5 +1,6 @@
 import { improvementVerdict, REPS_PER_SET, type SetSummary, type WorkflowMode } from '../lib/sessionFlow';
 import type { SessionRep } from '../lib/types';
+import { PlankDebugList } from './AdminSheet';
 import { CompareBar, MetricBar } from './MetricBar';
 
 interface ResultsPanelProps {
@@ -18,6 +19,7 @@ interface ResultsPanelProps {
   onSaveLocal: () => void;
   onExportNotes: () => void;
   onExportCsv: () => void;
+  adminUnlocked: boolean;
 }
 
 function RepTiles({ reps, label }: { reps: SessionRep[]; label: string }) {
@@ -109,7 +111,7 @@ export function ResultsPanel(props: ResultsPanelProps) {
         ) : (
           <div className="metric-list">
             <MetricBar label="Elbow depth" value={overall.count ? overall.depth : null} />
-            <MetricBar label="Plank line" value={overall.count ? overall.bodyLine : null} />
+            <MetricBar label="Plank line" value={overall.count ? overall.bodyLine : null} emptyLabel={overall.count ? 'n/a' : '—'} />
             <MetricBar label="Elbow tuck" value={overall.count ? overall.elbowFlare : null} />
           </div>
         )}
@@ -127,6 +129,13 @@ export function ResultsPanel(props: ResultsPanelProps) {
           ) : (
             <RepTiles label="Reps" reps={ordered} />
           )}
+        </section>
+      ) : null}
+
+      {props.adminUnlocked && ordered.length ? (
+        <section className="card">
+          <h3 className="card__title">Admin · plank line debug</h3>
+          <PlankDebugList reps={ordered} />
         </section>
       ) : null}
 

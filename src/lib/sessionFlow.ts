@@ -92,7 +92,7 @@ export function activeStepKey(phase: JourneyPhase, mode: WorkflowMode, trialStat
 export interface RepLike {
   score: number;
   elbowDepthScore: number;
-  bodyLineScore: number;
+  bodyLineScore: number | null;
   elbowFlareScore: number;
   hipBias?: number;
 }
@@ -105,7 +105,8 @@ export interface SetSummary {
   average: number;
   best: number;
   depth: number;
-  bodyLine: number;
+  /** Null when no rep in the set had a readable plank line. */
+  bodyLine: number | null;
   elbowFlare: number;
   hipDirection: SetHipDirection;
 }
@@ -129,14 +130,15 @@ function summarizeHipDirection(reps: RepLike[]): SetHipDirection {
 }
 
 export function summarizeReps(reps: RepLike[]): SetSummary {
-  if (!reps.length) return { count: 0, average: 0, best: 0, depth: 0, bodyLine: 0, elbowFlare: 0, hipDirection: null };
+  if (!reps.length) return { count: 0, average: 0, best: 0, depth: 0, bodyLine: null, elbowFlare: 0, hipDirection: null };
   const avg = (pick: (rep: RepLike) => number) => Math.round(reps.reduce((sum, rep) => sum + pick(rep), 0) / reps.length);
+  const plankScores = reps.map((rep) => rep.bodyLineScore).filter((value): value is number => value !== null && value !== undefined);
   return {
     count: reps.length,
     average: avg((rep) => rep.score),
     best: reps.reduce((best, rep) => Math.max(best, rep.score), 0),
     depth: avg((rep) => rep.elbowDepthScore),
-    bodyLine: avg((rep) => rep.bodyLineScore),
+    bodyLine: plankScores.length ? Math.round(plankScores.reduce((sum, value) => sum + value, 0) / plankScores.length) : null,
     elbowFlare: avg((rep) => rep.elbowFlareScore),
     hipDirection: summarizeHipDirection(reps),
   };
@@ -155,7 +157,7 @@ export function coachingFocusLines(summary: SetSummary, viewMode: CameraViewMode
   const ranked = rankCoachingTips(
     [
       { key: 'depth', score: summary.depth, passLine: FOCUS_PASS_LINES.depth },
-      { key: 'hips', score: summary.bodyLine, passLine: FOCUS_PASS_LINES.hips },
+      ...(summary.bodyLine === null ? [] : [{ key: 'hips' as const, score: summary.bodyLine, passLine: FOCUS_PASS_LINES.hips }]),
       { key: 'elbowFlare', score: summary.elbowFlare, passLine: FOCUS_PASS_LINES.elbowFlare },
     ],
     viewMode,

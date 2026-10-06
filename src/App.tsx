@@ -11,6 +11,7 @@ import { Stepper } from './components/Stepper';
 import {
   createBaselineReference,
   createDefaultBaselineReference,
+  elbowRangeFor,
   gradingAngleForView,
   loadBaselines,
   saveBaselines,
@@ -39,7 +40,9 @@ import {
 import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { createRepCounter } from './lib/repCounter';
-import { liveCoachingIssues, shortenCue, type CoachingIssueKey } from './lib/coaching';
+import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
+import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
+import { updatePlankReference, type PlankReference } from './lib/plankLine';
 import {
   addRepFrame,
   analyzePose,
@@ -48,6 +51,7 @@ import {
   MIN_SIGNAL,
   REP_BOTTOM_ANGLE,
   REP_TOP_ANGLE,
+  withElbowNote,
 } from './lib/scoring';
 import {
   activeStepKey,
@@ -199,7 +203,9 @@ export default function App() {
   const repStateRef = useRef(freshRepState());
   const repCounterRef = useRef(createRepCounter());
   const attemptRepCountRef = useRef<Record<1 | 2, number>>({ 1: 0, 2: 0 });
-  const frameHandlerRef = useRef<(landmarks: PosePoint[] | undefined) => void>(() => undefined);
+  const frameHandlerRef = useRef<(landmarks: PosePoint[] | undefined, worldLandmarks?: PosePoint[]) => void>(() => undefined);
+  const elbowSmootherRef = useRef(createRollingMedian(7));
+  const plankReferenceRef = useRef<PlankReference>({});
   const coachingFocusRef = useRef<{ key: CoachingIssueKey | null; resolvedAt: number | null; cue: string }>({
     key: null,
     resolvedAt: null,
@@ -315,6 +321,9 @@ export default function App() {
   useEffect(() => {
     calibrationStateRef.current = calibrationState;
   }, [calibrationState]);
+  useEffect(() => {
+    plankReferenceRef.current = {};
+  }, [cameraView]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 3600);
@@ -432,27 +441,45 @@ export default function App() {
 
   const applyBaselineBias = (frame: PoseAnalysis): PoseAnalysis => {
     const reference = baselines.references[gradingAngleForView(frame.viewMode)];
-    if (!reference) return frame;
+    const smoothedAbduction = elbowSmootherRef.current.push(frame.elbowAbduction);
+    const elbowAbduction = smoothedAbduction === null ? null : Math.round(smoothedAbduction);
+    const elbowFlareScore = elbowTuckScore(elbowAbduction, elbowRangeFor(reference));
+    const notes = withElbowNote(frame.notes, frame.viewMode, elbowFlareScore);
+    if (!reference) {
+      return {
+        ...frame,
+        elbowAbduction,
+        elbowFlareScore,
+        notes,
+        overallScore: weightedRepScore(frame.viewMode, {
+          depth: frame.elbowDepthScore,
+          bodyLine: frame.bodyLineScore,
+          elbowFlare: elbowFlareScore,
+          handStack: frame.handStackScore,
+          headAlignment: frame.headAlignmentScore,
+        }),
+      };
+    }
     const score = (key: BaselineMetricKey, actual: number) => scoreAgainstBaseline(actual, reference.targets[key], reference.tolerances[key]);
     const elbowDepthScore = score('elbowDepthScore', frame.elbowDepthScore);
-    const bodyLineScore = score('bodyLineScore', frame.bodyLineScore);
-    const elbowFlareScore = score('elbowFlareScore', frame.elbowFlareScore);
+    const bodyLineScore = frame.bodyLineScore === null ? null : score('bodyLineScore', frame.bodyLineScore);
     const handStackScore = score('handStackScore', frame.handStackScore);
     const headAlignmentScore = score('headAlignmentScore', frame.headAlignmentScore);
     const framingScore = score('framingScore', frame.framingScore);
     return {
       ...frame,
-      overallScore: Math.round(
-        elbowDepthScore * 0.35 +
-          bodyLineScore * 0.3 +
-          elbowFlareScore * 0.12 +
-          handStackScore * 0.1 +
-          headAlignmentScore * 0.08 +
-          framingScore * 0.05,
-      ),
+      overallScore: weightedRepScore(frame.viewMode, {
+        depth: elbowDepthScore,
+        bodyLine: bodyLineScore,
+        elbowFlare: elbowFlareScore,
+        handStack: handStackScore,
+        headAlignment: headAlignmentScore,
+      }),
       elbowDepthScore,
       bodyLineScore,
       elbowFlareScore,
+      elbowAbduction,
+      notes,
       handStackScore,
       headAlignmentScore,
       framingScore,
@@ -624,6 +651,8 @@ export default function App() {
     repAccumulatorRef.current = createEmptyRepAccumulator();
     repStateRef.current = freshRepState();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
+    elbowSmootherRef.current.reset();
+    plankReferenceRef.current = {};
     setRestStartedAt(null);
     setRestBypassed(false);
   };
@@ -808,7 +837,15 @@ export default function App() {
       attemptRepCountRef.current[attempt] += 1;
     }
     setSessionReps((current) => [rep, ...current].slice(0, 50));
-    pushLog('rep', `Rep ${rep.index}${attempt ? ` (set ${attempt})` : ''} scored ${rep.score}/100`, rep.notes.join(' • '));
+    pushLog(
+      'rep',
+      `Rep ${rep.index}${attempt ? ` (set ${attempt})` : ''} scored ${rep.score}/100`,
+      [
+        `depth ${rep.elbowDepthScore} · plank ${rep.bodyLineScore ?? 'n/a'} · elbow ${rep.elbowFlareScore}${rep.elbowAbduction === undefined ? '' : ` (${rep.elbowAbduction}°)`}`,
+        `plank: ${rep.plankDebug ?? 'n/a'}`,
+        ...rep.notes,
+      ].join(' • '),
+    );
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
     if (currentModeAllowsAudio && audioUnlockedRef.current) {
       repSpeechLockUntilRef.current = Date.now() + 900;
@@ -1008,9 +1045,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    frameHandlerRef.current = (landmarks) => {
+    frameHandlerRef.current = (landmarks, worldLandmarks) => {
       drawSkeleton(modeAllowsVisuals ? landmarks : null);
-      processAnalysis(applyBaselineBias(analyzePose(landmarks, cameraView)));
+      const video = videoRef.current;
+      const aspect = video?.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 0.75;
+      const plankReference = plankReferenceRef.current;
+      const frame = analyzePose(landmarks, cameraView, { worldLandmarks, aspect, plankReference });
+      const inPlank = calibrationStateRef.current !== 'idle' && calibrationStateRef.current !== 'checking';
+      if (cameraView === 'head-on' && inPlank && frame.confidence >= 0.72 && frame.elbowAngle >= REP_TOP_ANGLE) {
+        plankReferenceRef.current = updatePlankReference(plankReference, landmarks, aspect);
+      }
+      processAnalysis(applyBaselineBias(frame));
     };
   });
 
@@ -1046,6 +1091,7 @@ export default function App() {
     setCameraError('');
     stopCamera();
     resetCalibrationFlow();
+    plankReferenceRef.current = {};
     void unlockSound();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1069,7 +1115,7 @@ export default function App() {
         const videoEl = videoRef.current;
         if (videoEl.readyState >= 2) {
           const result = poseRef.current.detectForVideo(videoEl, performance.now());
-          frameHandlerRef.current(result.landmarks[0] as PosePoint[] | undefined);
+          frameHandlerRef.current(result.landmarks[0] as PosePoint[] | undefined, result.worldLandmarks?.[0] as PosePoint[] | undefined);
         }
         rafRef.current = requestAnimationFrame(loop);
       };
@@ -1389,16 +1435,22 @@ export default function App() {
     });
   };
 
+  const updateElbowRange = (range: ElbowIdealRange) => {
+    setBaselineDraft((current) => (current ? { ...current, elbowIdealRange: { min: Math.max(0, Math.min(90, range.min)), max: Math.max(0, Math.min(90, range.max)) } } : current));
+  };
+
   const seedDraftFromPose = () => {
     if (!analysis) return;
     const seeded = createBaselineReference(baselineAngle, analysis, `${baselineAngle} 100 standard`);
-    setBaselineDraft((current) => (current ? { ...seeded, tolerances: current.tolerances } : seeded));
+    setBaselineDraft((current) =>
+      current ? { ...seeded, tolerances: current.tolerances, elbowIdealRange: elbowRangeFor(current) } : seeded,
+    );
     setToast({ tone: 'info', text: 'Draft filled from the live pose. Review, then save.' });
   };
 
   const saveStandard = () => {
     if (!baselineDraft) return;
-    const reference = { ...baselineDraft, angle: baselineAngle, createdAt: nowIso() };
+    const reference = { ...baselineDraft, elbowIdealRange: elbowRangeFor(baselineDraft), angle: baselineAngle, createdAt: nowIso() };
     setBaselines((current) => ({
       updatedAt: nowIso(),
       references: { ...current.references, [baselineAngle]: reference },
@@ -1790,6 +1842,7 @@ export default function App() {
               onSaveLocal={saveCurrentSession}
               onExportNotes={exportNotes}
               onExportCsv={exportCsv}
+              adminUnlocked={adminUnlocked}
             />
           ) : null}
 
@@ -1809,11 +1862,13 @@ export default function App() {
         gradingAngle={gradingAngle}
         draft={baselineDraft}
         onDraftChange={updateDraft}
+        onElbowRangeChange={updateElbowRange}
         onSeedFromPose={seedDraftFromPose}
         onSave={saveStandard}
         onClearAll={clearStandards}
         live={cameraStatus === 'live' ? analysis : null}
         logs={sessionLogs}
+        reps={sessionReps}
         consentSettings={consentSettings}
         onConsentSettingsChange={updateConsentSettings}
         pendingConsentCount={pendingConsents.length}

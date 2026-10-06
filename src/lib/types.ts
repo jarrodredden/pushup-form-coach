@@ -2,6 +2,8 @@ export type FeedbackMode = 'control' | 'visual' | 'audio' | 'combined';
 export type CameraFacing = 'user' | 'environment';
 export type CameraViewMode = 'head-on' | 'side';
 
+import type { PlankMethod } from './plankLine';
+
 export interface PosePoint {
   x: number;
   y: number;
@@ -15,8 +17,14 @@ export interface PoseAnalysis {
   overallScore: number;
   elbowAngle: number;
   elbowDepthScore: number;
-  bodyLineScore: number;
+  /** Plank line 0–100; null when the camera can't see enough to judge it (never 0 for missing data). */
+  bodyLineScore: number | null;
+  plankRaw: number | null;
+  plankMethod: PlankMethod | null;
+  plankDetail: string | null;
   elbowFlareScore: number;
+  /** Upper-arm-to-torso angle in the plank plane (degrees); null when the camera can't read it. */
+  elbowAbduction: number | null;
   handStackScore: number;
   headAlignmentScore: number;
   framingScore: number;
@@ -33,8 +41,11 @@ export interface PoseAnalysis {
 export interface RepFrameSample {
   elbowAngle: number;
   depth: number;
-  bodyLine: number;
+  bodyLine: number | null;
+  plankRaw: number | null;
+  plankMethod: PlankMethod | null;
   elbowFlare: number;
+  elbowAbduction: number | null;
   headAlignment: number;
   framing: number;
   hipSag: number | null;
@@ -56,7 +67,11 @@ export interface SessionRep {
   score: number;
   notes: string[];
   elbowDepthScore: number;
-  bodyLineScore: number;
+  bodyLineScore: number | null;
+  plankMethod?: PlankMethod | null;
+  /** Median raw plank-line reading over the scored bottom frames (see plankLine.ts for units). */
+  plankRaw?: number | null;
+  plankDebug?: string;
   elbowFlareScore: number;
   handStackScore: number;
   headAlignmentScore: number;
@@ -65,6 +80,7 @@ export interface SessionRep {
   hipPikeScore: number | null;
   hipBias?: number;
   bottomElbowAngle?: number;
+  elbowAbduction?: number;
   confidence: number;
   timestamp: number;
 }
@@ -130,6 +146,11 @@ export interface BaselinePoseReference {
     hipSagScore: number;
     hipPikeScore: number;
   };
+  /**
+   * Ideal upper-arm-to-torso angle (degrees). Elbow tuck is graded on this range instead of the
+   * elbowFlareScore target/tolerance; standards saved before it existed get the default range.
+   */
+  elbowIdealRange?: { min: number; max: number };
   elbowDepthScore: number;
   bodyLineScore: number;
   elbowFlareScore: number;

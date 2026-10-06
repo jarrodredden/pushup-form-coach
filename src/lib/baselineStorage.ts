@@ -1,3 +1,4 @@
+import { DEFAULT_ELBOW_IDEAL_RANGE, normalizeElbowRange, type ElbowIdealRange } from './elbowTuck';
 import type { BaselineAngle, BaselinePoseReference, CameraViewMode, PoseAnalysis, SavedBaselines } from './types';
 
 const BASELINE_STORAGE_KEY = 'pushup-coach-baselines';
@@ -9,9 +10,11 @@ const emptyBaselines = (): SavedBaselines => ({
 
 function normalizeReference(reference: BaselinePoseReference | null): BaselinePoseReference | null {
   if (!reference) return null;
-  if (reference.targets && reference.tolerances) return reference;
+  const elbowIdealRange = normalizeElbowRange(reference.elbowIdealRange);
+  if (reference.targets && reference.tolerances) return { ...reference, elbowIdealRange };
   return {
     ...reference,
+    elbowIdealRange,
     targets: {
       elbowDepthScore: reference.elbowDepthScore,
       bodyLineScore: reference.bodyLineScore,
@@ -61,7 +64,7 @@ export function saveBaselines(baselines: SavedBaselines) {
 export function createBaselineReference(angle: BaselineAngle, analysis: PoseAnalysis, label: string): BaselinePoseReference {
   const targets = {
     elbowDepthScore: analysis.elbowDepthScore,
-    bodyLineScore: analysis.bodyLineScore,
+    bodyLineScore: analysis.bodyLineScore ?? 100,
     elbowFlareScore: analysis.elbowFlareScore,
     handStackScore: analysis.handStackScore,
     headAlignmentScore: analysis.headAlignmentScore,
@@ -84,6 +87,7 @@ export function createBaselineReference(angle: BaselineAngle, analysis: PoseAnal
       hipSagScore: 12,
       hipPikeScore: 12,
     },
+    elbowIdealRange: { ...DEFAULT_ELBOW_IDEAL_RANGE },
     elbowDepthScore: targets.elbowDepthScore,
     bodyLineScore: targets.bodyLineScore,
     elbowFlareScore: targets.elbowFlareScore,
@@ -102,7 +106,7 @@ export type BaselineMetricKey = keyof BaselinePoseReference['targets'];
 export const BASELINE_METRICS: Array<{ key: BaselineMetricKey; label: string; hint: string; sideOnly?: boolean }> = [
   { key: 'elbowDepthScore', label: 'Elbow depth', hint: 'How low you go at the bottom of the rep.' },
   { key: 'bodyLineScore', label: 'Plank line', hint: 'Shoulders, hips, and ankles in one straight line.' },
-  { key: 'elbowFlareScore', label: 'Elbow tuck', hint: 'Elbows stay close instead of flaring out wide.' },
+  { key: 'elbowFlareScore', label: 'Elbow tuck', hint: 'Upper arm about 30–50° from the torso. Tucked closer than that is still a 100.' },
   { key: 'handStackScore', label: 'Hands under shoulders', hint: 'Wrists stacked below the shoulders.' },
   { key: 'headAlignmentScore', label: 'Head position', hint: 'Head centered, neck neutral.' },
   { key: 'framingScore', label: 'Framing', hint: 'How much of the body the camera can see.' },
@@ -134,7 +138,11 @@ export function createDefaultBaselineReference(angle: BaselineAngle): BaselinePo
       elbowAngle: 85,
       elbowDepthScore: 100,
       bodyLineScore: 100,
+      plankRaw: null,
+      plankMethod: null,
+      plankDetail: null,
       elbowFlareScore: 100,
+      elbowAbduction: null,
       handStackScore: 100,
       headAlignmentScore: 100,
       framingScore: 100,
@@ -157,4 +165,8 @@ export function scoreAgainstBaseline(actual: number, target: number | null, tole
   const fullCreditAt = Math.max(1, target - Math.max(0, tolerance));
   const score = (actual / fullCreditAt) * 100;
   return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+export function elbowRangeFor(reference: BaselinePoseReference | null | undefined): ElbowIdealRange {
+  return normalizeElbowRange(reference?.elbowIdealRange);
 }

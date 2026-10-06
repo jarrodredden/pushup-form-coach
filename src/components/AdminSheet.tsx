@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { BASELINE_ANGLES, BASELINE_METRICS, elbowDegreesForDepthScore, type BaselineMetricKey } from '../lib/baselineStorage';
+import { BASELINE_ANGLES, BASELINE_METRICS, elbowDegreesForDepthScore, elbowRangeFor, type BaselineMetricKey } from '../lib/baselineStorage';
 import { DEFAULT_CONSENT_SETTINGS, type ConsentSettings } from '../lib/consent';
-import type { BaselineAngle, BaselinePoseReference, LogEntry, PoseAnalysis, SavedBaselines } from '../lib/types';
+import type { ElbowIdealRange } from '../lib/elbowTuck';
+import type { BaselineAngle, BaselinePoseReference, LogEntry, PoseAnalysis, SavedBaselines, SessionRep } from '../lib/types';
 import { LockIcon, UnlockIcon } from './Icons';
 import { Sheet } from './Sheet';
 
@@ -17,11 +18,13 @@ interface AdminSheetProps {
   gradingAngle: BaselineAngle;
   draft: BaselinePoseReference | null;
   onDraftChange: (key: BaselineMetricKey, field: 'targets' | 'tolerances', value: number | null) => void;
+  onElbowRangeChange: (range: ElbowIdealRange) => void;
   onSeedFromPose: () => void;
   onSave: () => void;
   onClearAll: () => void;
   live: PoseAnalysis | null;
   logs: LogEntry[];
+  reps: SessionRep[];
   consentSettings: ConsentSettings;
   onConsentSettingsChange: (settings: ConsentSettings) => void;
   pendingConsentCount: number;
@@ -30,6 +33,7 @@ interface AdminSheetProps {
 }
 
 const parseNumber = (raw: string) => (raw === '' ? null : Math.max(0, Math.min(100, Number(raw))));
+const parseDegrees = (raw: string, fallback: number) => (raw === '' || !Number.isFinite(Number(raw)) ? fallback : Math.round(Number(raw)));
 
 export function AdminSheet(props: AdminSheetProps) {
   const { open, onClose, unlocked } = props;
@@ -97,7 +101,7 @@ export function AdminSheet(props: AdminSheetProps) {
 
           {tab === 'standards' ? <StandardsEditor {...props} /> : null}
           {tab === 'consent' ? <ConsentSettingsEditor {...props} /> : null}
-          {tab === 'diagnostics' ? <Diagnostics logs={props.logs} /> : null}
+          {tab === 'diagnostics' ? <Diagnostics logs={props.logs} reps={props.reps} live={props.live} /> : null}
 
           <button className="btn btn--ghost btn--block" onClick={props.onLock}>
             <LockIcon /> Sign out admin
@@ -108,7 +112,7 @@ export function AdminSheet(props: AdminSheetProps) {
   );
 }
 
-function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft, onDraftChange, onSeedFromPose, onSave, onClearAll, live }: AdminSheetProps) {
+function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft, onDraftChange, onElbowRangeChange, onSeedFromPose, onSave, onClearAll, live }: AdminSheetProps) {
   const angleInfo = BASELINE_ANGLES.find((item) => item.angle === angle);
   const metrics = BASELINE_METRICS.filter((metric) => !metric.sideOnly || angle === 'side');
   const saved = baselines.references[angle];
@@ -158,6 +162,52 @@ function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft,
           const target = draft?.targets[metric.key] ?? null;
           const tolerance = draft?.tolerances[metric.key] ?? null;
           const liveValue = live ? live[metric.key] : null;
+          if (metric.key === 'elbowFlareScore') {
+            const range = draft?.elbowIdealRange ?? elbowRangeFor(draft);
+            return (
+              <div key={metric.key} className="standard-row" role="row">
+                <div className="standard-row__label" role="cell">
+                  <strong>{metric.label} (degrees)</strong>
+                  <span>{metric.hint} Set the ideal min°–max°; flare past max loses points gradually.</span>
+                  {live ? (
+                    <span className="standard-row__live">
+                      Live now: {live.elbowAbduction === null ? 'arm angle n/a' : `${live.elbowAbduction}°`} → {live.elbowFlareScore}
+                    </span>
+                  ) : null}
+                </div>
+                <input
+                  role="cell"
+                  className="input input--num"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={85}
+                  aria-label="Elbow tuck ideal minimum degrees"
+                  value={range.min}
+                  onChange={(event) => onElbowRangeChange({ ...range, min: parseDegrees(event.target.value, range.min) })}
+                />
+                <input
+                  role="cell"
+                  className="input input--num"
+                  type="number"
+                  inputMode="numeric"
+                  min={20}
+                  max={85}
+                  aria-label="Elbow tuck ideal maximum degrees"
+                  value={range.max}
+                  onChange={(event) => onElbowRangeChange({ ...range, max: parseDegrees(event.target.value, range.max) })}
+                />
+              </div>
+            );
+          }
+          const liveDetail =
+            metric.key === 'bodyLineScore' && live
+              ? live.bodyLineScore === null
+                ? `n/a (${live.plankDetail ?? 'not visible'})`
+                : `${Math.round(live.bodyLineScore)} · ${live.plankDetail ?? ''}`
+              : liveValue !== null && liveValue !== undefined
+                ? `${Math.round(liveValue)}`
+                : null;
           return (
             <div key={metric.key} className="standard-row" role="row">
               <div className="standard-row__label" role="cell">
@@ -166,7 +216,7 @@ function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft,
                   {metric.key === 'elbowDepthScore' && target !== null ? `≈ ${elbowDegreesForDepthScore(target)}° elbow bend · ` : ''}
                   {metric.hint}
                 </span>
-                {liveValue !== null && liveValue !== undefined ? <span className="standard-row__live">Live now: {Math.round(liveValue)}</span> : null}
+                {liveDetail !== null ? <span className="standard-row__live">Live now: {liveDetail}</span> : null}
               </div>
               <input
                 role="cell"
@@ -194,7 +244,9 @@ function StandardsEditor({ baselines, angle, onAngleChange, gradingAngle, draft,
           );
         })}
       </div>
-      <p className="fine-print">Values are 0–100 form scores. Example: target 90 with ±10 means any rep scoring 80 or higher on that metric counts as perfect.</p>
+      <p className="fine-print">
+        Values are 0–100 form scores. Example: target 90 with ±10 means any rep scoring 80 or higher on that metric counts as perfect. Elbow tuck is set in degrees instead: anything at or under the max is a 100.
+      </p>
 
       <div className="btn-row">
         <button className="btn btn--primary" onClick={onSave} disabled={!draft}>
@@ -253,9 +305,35 @@ function ConsentSettingsEditor({ consentSettings, onConsentSettingsChange, pendi
   );
 }
 
-function Diagnostics({ logs }: { logs: LogEntry[] }) {
+export function PlankDebugList({ reps }: { reps: SessionRep[] }) {
+  const ordered = [...reps].sort((a, b) => a.index - b.index);
+  return (
+    <div className="plank-debug" aria-label="Plank line per rep">
+      {ordered.map((rep) => (
+        <div key={rep.index} className="plank-debug__row">
+          <strong>
+            Rep {rep.index}
+            {rep.attempt ? ` · set ${rep.attempt}` : ''} · plank {rep.bodyLineScore ?? 'n/a'} · elbow {rep.elbowAbduction ?? '–'}° → {rep.elbowFlareScore}
+          </strong>
+          <span>{rep.plankDebug ?? 'no plank reading saved'}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Diagnostics({ logs, reps, live }: { logs: LogEntry[]; reps: SessionRep[]; live: PoseAnalysis | null }) {
   return (
     <div className="log-list">
+      <div className="placement-note">
+        <strong>Plank line (raw, per rep)</strong>
+        <p>
+          Live: {live ? (live.bodyLineScore === null ? 'n/a' : live.bodyLineScore) : 'camera off'}
+          {live?.plankRaw !== null && live?.plankRaw !== undefined ? ` · raw ${live.plankRaw}` : ''}
+          {live?.plankDetail ? ` · ${live.plankDetail}` : ''}
+        </p>
+        {reps.length ? <PlankDebugList reps={reps} /> : <p className="fine-print">Reps from this session appear here with the raw reading used for the plank score.</p>}
+      </div>
       {logs.length === 0 ? (
         <p className="fine-print">Camera, rep, and coaching events appear here during a session.</p>
       ) : (
