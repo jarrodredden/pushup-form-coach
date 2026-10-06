@@ -39,6 +39,7 @@ import {
 } from './lib/consent';
 import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
+import { coverLayout, sameLayout, toStagePoint, type StageLayout } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
@@ -197,6 +198,9 @@ function ConfidenceRing({ value }: { value: number }) {
 export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageLayoutRef = useRef<StageLayout | null>(null);
+  const stageDprRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const poseRef = useRef<PoseLandmarker | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -1064,25 +1068,44 @@ export default function App() {
     updateRepState(frame);
   };
 
+  /**
+   * Sizes the video and the overlay from one cover transform of the stream into the stage. Runs on
+   * stream metadata/resize, stage resize, window resize, and orientation change, and is re-checked
+   * every frame so a size change can never leave the two layers out of step.
+   */
+  const layoutStage = () => {
+    const stage = stageRef.current;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!stage || !video || !canvas) return null;
+    const next = coverLayout(stage.clientWidth, stage.clientHeight, video.videoWidth, video.videoHeight);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    if (sameLayout(next, stageLayoutRef.current) && dpr === stageDprRef.current) return next;
+    stageLayoutRef.current = next;
+    stageDprRef.current = dpr;
+    if (!next) return null;
+    Object.assign(video.style, { width: `${next.width}px`, height: `${next.height}px`, left: `${next.offsetX}px`, top: `${next.offsetY}px` });
+    canvas.style.width = `${next.stageWidth}px`;
+    canvas.style.height = `${next.stageHeight}px`;
+    canvas.width = Math.round(next.stageWidth * dpr);
+    canvas.height = Math.round(next.stageHeight * dpr);
+    return next;
+  };
+
   const drawSkeleton = (landmarks: PosePoint[] | null | undefined) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const video = videoRef.current;
-    if (!ctx || !video) {
-      return;
-    }
-    const width = video.videoWidth || canvas.width;
-    const height = video.videoHeight || canvas.height;
-    if (!width || !height) return;
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    // Keep scoring on raw camera coordinates; the preview mirror is applied to both layers together.
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const layout = layoutStage();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!landmarks?.length) return;
-    ctx.lineWidth = Math.max(3, canvas.width / 200);
+    if (!layout || !landmarks?.length) return;
+    ctx.setTransform(stageDprRef.current, 0, 0, stageDprRef.current, 0, 0);
+    // Landmarks stay in raw camera coordinates for scoring; mirroring happens only when drawing.
+    const at = (point: PosePoint) => toStagePoint(point, layout, previewMirrored);
+    const radius = Math.max(3, Math.min(layout.stageWidth, layout.stageHeight) / 110);
+    ctx.lineWidth = Math.max(2.5, radius * 0.9);
+    ctx.lineCap = 'round';
     ctx.strokeStyle = 'rgba(190, 255, 92, 0.85)';
     ctx.fillStyle = '#f4ffe0';
 
@@ -1095,19 +1118,50 @@ export default function App() {
       const end = landmarks[b];
       if (!start || !end) continue;
       if ((start.visibility ?? 0) < 0.3 || (end.visibility ?? 0) < 0.3) continue;
+      const from = at(start);
+      const to = at(end);
       ctx.beginPath();
-      ctx.moveTo(start.x * canvas.width, start.y * canvas.height);
-      ctx.lineTo(end.x * canvas.width, end.y * canvas.height);
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
       ctx.stroke();
     }
 
     for (const point of landmarks) {
       if ((point.visibility ?? 0) < 0.3) continue;
+      const { x, y } = at(point);
       ctx.beginPath();
-      ctx.arc(point.x * canvas.width, point.y * canvas.height, Math.max(3, canvas.width / 200), 0, Math.PI * 2);
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
   };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const stage = stageRef.current;
+    if (!video || !stage) return;
+    const relayout = () => {
+      stageLayoutRef.current = null;
+      layoutStage();
+    };
+    const onOrientation = () => {
+      relayout();
+      // iOS reports the new viewport a beat after the event.
+      window.setTimeout(relayout, 250);
+    };
+    video.addEventListener('loadedmetadata', relayout);
+    video.addEventListener('resize', relayout);
+    window.addEventListener('resize', relayout);
+    window.addEventListener('orientationchange', onOrientation);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(relayout);
+    observer?.observe(stage);
+    return () => {
+      video.removeEventListener('loadedmetadata', relayout);
+      video.removeEventListener('resize', relayout);
+      window.removeEventListener('resize', relayout);
+      window.removeEventListener('orientationchange', onOrientation);
+      observer?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     frameHandlerRef.current = (landmarks, worldLandmarks) => {
@@ -1165,9 +1219,12 @@ export default function App() {
           facingMode: { ideal: cameraFacing },
           width: { ideal: 1280 },
           height: { ideal: 720 },
+          aspectRatio: { ideal: 16 / 9 },
         },
       });
       streamRef.current = stream;
+      const settings = stream.getVideoTracks()[0]?.getSettings?.();
+      if (settings?.width && settings.height) pushLog('info', `Camera stream ${settings.width}×${settings.height}.`);
       const video = videoRef.current;
       video.srcObject = stream;
       await video.play();
@@ -1773,9 +1830,9 @@ export default function App() {
 
       <main className="layout">
         <section className={cameraActive ? 'stage-col' : 'stage-col is-dormant'} aria-hidden={!cameraActive}>
-          <div className="stage">
+          <div className="stage" ref={stageRef}>
             <video ref={videoRef} className={previewMirrored ? 'stage__video mirror' : 'stage__video'} playsInline muted autoPlay />
-            <canvas ref={canvasRef} className={previewMirrored ? 'stage__overlay mirror' : 'stage__overlay'} />
+            <canvas ref={canvasRef} className="stage__overlay" />
             <div className="stage__scrim" aria-hidden="true" />
 
             <div className="stage__top">
