@@ -9,11 +9,11 @@ Live: https://pushup-form-coach.vercel.app (deploys from `main` on Vercel).
 The app walks the volunteer through six steps, shown in the progress bar at the top:
 **Name → Consent → Frame → Set 1 → Coach → Set 2 → Results**.
 
-1. **Name** — type the volunteer's name. Then **Consent**: tap **Read & sign consent** (see [Consent forms](#consent-forms) below). **Start camera and sound** stays locked until the form is signed for that name. Pick **Coaching session** (2 sets of 5) or **Free practice**, and a **Feedback mode** for the experiment (Control / Visual / Audio / Combined). **Spoken form tips** adds the live-coach voice. Camera and view options are under **Camera setup**.
+1. **Name** — type the volunteer's name. Then **Consent**: tap **Read & sign consent** (see [Consent forms](#consent-forms) below). **Start camera and sound** stays locked until the form is signed for that name. Pick **Coaching session** (2 sets of 5) or **Free practice**. Volunteers always get the study protocol, Head-on (front) camera, and can't see the feedback or camera-angle selectors (see [Feedback modes](#feedback-modes-the-experiment)). With Admin unlocked, the **Feedback** and **View** selectors appear for testing.
 2. Tap **Start camera and sound**. That single tap also unlocks spoken audio on iPhone Chrome/Safari (the "Ready" clip plays).
 3. **Frame** — prop the phone low on the floor about 1.5 m in front (Head-on) and hold the top of a push-up. The ring fills as tracking locks in; the app says "Calibration complete", counts down 5-4-3-2-1, "Let's get started", then **GO** flashes on the video. **Start anyway** appears after a few seconds if tracking is borderline.
 4. **Set 1** — do 5 push-ups. The big counter and dots track reps; **Stop session** is always at the bottom.
-5. **Coach** — the camera stays live so the volunteer can practice the fix. The panel shows the set 1 score and the top 1–2 things to change (depth, plank line, elbows). A mandatory **2-minute rest** starts as soon as set 1 ends so set 2 isn't skewed by fatigue: **Start set 2** stays locked and shows the countdown (**Rest 2:00 … 0:01**) until the full 120 seconds pass, then works as usual and starts another countdown. Tips and the practice bars stay available during the rest. When Admin is PIN-unlocked, a **Skip rest (admin only — testing)** button also appears; volunteers never see it.
+5. **Coach** — the camera stays live so the volunteer can practice the fix. The panel shows the set 1 score and the top 1–2 things to change (depth, plank line, elbows). A mandatory **2-minute rest** starts as soon as set 1 ends so set 2 isn't skewed by fatigue: **Start set 2** stays locked and shows the countdown (**Rest 2:00 … 0:01**) until the full 120 seconds pass, then works as usual and starts another countdown. Next to the countdown, an animated stick figure loops an ideal push-up (front view, 2 s per rep): straight body, hands slightly wider than the shoulders, elbows tucked about 45°, chest near the floor, full lockout ("Watch the ideal form: body straight, elbows tucked, chest low"). It's drawn in SVG from the app's own push-up model (`src/components/PushupDemo.tsx`), so it works offline; with the OS "reduce motion" setting it shows a still bottom pose. Tips and the practice bars stay available during the rest. When Admin is PIN-unlocked, a **Skip rest (admin only — testing)** button also appears; volunteers never see it.
 6. **Set 2 → Results** — the results screen shows set 1 vs set 2, the point change, a depth / plank line / elbow breakdown, and every rep's score. Tap **Upload result** to add a row to the shared Google Sheet, then **Next volunteer** (clears the name) or **Try again** (same name).
 
 **History** (top right) lists sessions saved to this device with **Save to this device** on the results screen.
@@ -38,16 +38,20 @@ The consent is tied to the participant's name: changing the name or tapping **Ne
 1. Tap **Admin** (top right) and enter PIN `180180`. Admin stays unlocked on this device until **Sign out admin**.
 2. Under **100 standards**, pick an angle: **Front** (used for Head-on grading), **Side** (used for Side grading), Back, or Top. Each tab shows where to put the phone.
 3. Either type the target for each metric, or start the camera, hold a textbook rep, and tap **Use current pose as draft**.
-4. Set a tolerance for each metric, then **Save … 100 standard**.
+4. Set a tolerance for each metric, then **Save … 100 standard**. **Elbow tuck** is set as an ideal range of upper-arm-to-torso angles (default 30°–50°) instead of a single target: anything at or inside the max (including more tucked) scores 100. Standards saved before the range existed load with the default range.
 
 How grading uses it: every metric is a 0–100 form score. A rep scoring at or above *target − tolerance* on a metric gets full credit (100); shortfalls scale proportionally toward 0. So target 90 ± 10 means anything 80+ counts as perfect, and 40 scores 50. Views without a saved standard use the built-in scoring. **Diagnostics** shows the live event log.
 
 ## Scoring model
 
 - **Elbow depth** — how far the elbows bend (100 ≈ 85° at the bottom).
-- **Plank line** — shoulders, hips, and ankles in one line. Side view measures hip sag and hip pike (butt up) directly; Head-on uses a hip-height proxy (hips lower than expected in the image read as sag, higher as pike).
-- **Elbow tuck**, **hands under shoulders**, and **head position** fill out the rest.
-- The rep score is weighted mostly toward depth and plank line (Head-on: depth 55%, plank 24%, elbows 9%, hands 7%, head 5%; Side: depth 56%, plank 28%, hands 10%, elbows 6%).
+- **Plank line** — shoulders, hips, and ankles in one line (`src/lib/plankLine.ts`).
+  - *Side view:* the shoulder–hip–ankle angle (knees if the ankles aren't visible), corrected for the stream's aspect ratio. Up to 12° of bend scores 100, falling to 0 at 40°; the side of the shoulder→foot line the hip is on says sag vs pike.
+  - *Head-on:* the body runs toward the camera, so that angle can't be measured. Instead the app compares the shoulder-to-hip gap on screen (in shoulder widths) with what a straight plank would show at the current depth, calibrated from the volunteer's own top-of-rep plank. Before that calibration it uses a typical-plank reference with extra slack. Knees are the fallback when hips are unreliable.
+  - If neither hips nor knees are visible, plank line is **n/a**: it's left out of the rep score (the other weights are rescaled) instead of counting as 0. **Admin → Diagnostics** and the results screen (admin only) show the raw plank measurement for each rep.
+- **Elbow tuck** — the upper-arm-to-torso angle (Head-on: estimated from how far the elbow sits outside the shoulder–wrist line; Side: from MediaPipe's 3D landmarks), median-smoothed over 7 frames and over the rep's bottom so landmark jitter doesn't cost points. At or under the ideal max (default 50°) is 100; flare past it ramps down gently: +10° → 85, +20° → 60, +30° → 30, +40° → 10, +50° → 0.
+- **Hands under shoulders** and **head position** fill out the rest.
+- The rep score is weighted mostly toward depth and plank line (Head-on: depth 55%, plank 24%, elbows 9%, hands 7%, head 5%; Side: depth 56%, plank 28%, hands 10%, elbows 6%). A completely flared elbow can cost at most 9 points (Head-on), so elbows alone can't drag a good rep into the 50s.
 - **Each rep is scored at the bottom only.** Frames count once the elbows bend to 120° or less, and the score averages the frames within 12° of that rep's deepest point. The descent, the push back up, and the lockout don't dilute the score, so a slow, controlled rep scores the same as a quick one with the same bottom position.
 - Rep counting is separate from form: any real top → bottom → top cycle counts; form only changes the score.
 
@@ -62,13 +66,17 @@ How grading uses it: every metric is a 0–100 form score. A rep scoring at or a
 | Audio | no | yes |
 | Combined | yes | yes |
 
-**Spoken form tips** is a separate switch (Audio or Combined only) for the live-coach voice lines.
+**Volunteer protocol (default, Admin locked):** set 1 is **Control** (rep beeps/counts and the countdown only, no coaching), the break and set 2 are **Combined** (skeleton, on-screen cues, and spoken form tips), camera **Head-on (front)**. Free practice is always Combined. With Admin unlocked, the setup screen shows **Feedback** (Volunteer / Control / Visual / Audio / Combined) and **View** selectors, and a **Spoken form tips** switch for non-protocol modes.
+
+**In-set feedback is corrective only.** After each rep the coach names the single weakest part of that rep (for example "Tuck your elbows", "Lower your chest", "Keep your hips up", "Squeeze your core", "Full lockout at the top"), rotating phrasing so the same line never plays twice in a row. A clean rep gets silence, or rarely a neutral "Keep that form" (at most once per set). Praise is saved for the end: "Set one done. Nice work!" before the rest, and a session wrap-up with the set 1 → set 2 change ("Great work! You improved by 8 points from set 1 to set 2."). Spoken lines still queue, so they never overlap or cut off. Lines are in `src/lib/feedbackLines.json`; `node scripts/generate-voices.mjs` makes any missing MP3s.
 
 ## Results upload (Google Sheet)
 
 Upload posts one row as `text/plain` JSON to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.
 
-The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, and a short user agent.
+The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, a short user agent, and the protocol: **set1_feedback** / **set2_feedback** (e.g. `control` / `combined`) and **camera_view** (`front` / `side`). The script writes values by header name and adds any missing header columns to the right, so existing sheets keep their rows. The notes summary also starts with `[set1=control set2=combined camera=front]`, so the protocol is recorded even before the script is redeployed.
+
+**Redeploy for the protocol columns (Jarrod):** paste the current `Code.gs` into **Extensions → Apps Script**, **Save**, then **Deploy → Manage deployments → pencil → Version: New version → Deploy** (same `/exec` URL).
 
 The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts) into the spreadsheet's parent Drive folder and logs them on a **Consents** tab.
 
@@ -112,6 +120,7 @@ The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
 - Camera access needs a secure context: the https Vercel link, `localhost`, or the offline package opened as a local file.
 - Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts.
 - Head-on is the recommended setup. Use Side only with room for a tripod about 2 m away.
+- The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on stream metadata/resize, window resize, and orientation change, so the skeleton always sits on the person.
 
 ## Privacy
 
