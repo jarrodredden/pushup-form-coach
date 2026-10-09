@@ -55,6 +55,7 @@ import {
   type StageLayout,
 } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
+import { createRepMachine, plankPosture, repInProgressMs, stepRep, type PlankPosture } from './lib/repGate';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
 import { updatePlankReference, type PlankReference } from './lib/plankLine';
@@ -152,7 +153,7 @@ type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
 const nowIso = () => new Date().toISOString();
 const cameraViewLabel = (view: CameraViewMode) => (view === 'head-on' ? 'front' : 'side');
-const freshRepState = () => ({ sawTop: false, sawBottom: false, lastRepAt: 0, topStableFrames: 0, bottomStableFrames: 0, stallSince: 0, lockoutCued: false });
+const NO_POSTURE: PlankPosture = { horizontal: false, armsExtended: false, atTop: false, reason: 'no pose' };
 /** Arms held in this band after the bottom for LOCKOUT_STALL_MS means the rep stopped short of lockout. */
 const LOCKOUT_STALL_MIN_ANGLE = 135;
 const LOCKOUT_STALL_MS = 1200;
@@ -270,7 +271,10 @@ export default function App() {
   const activeFailureRef = useRef({ text: '', frames: 0, startedAt: 0 });
   const runningRef = useRef(false);
   const repAccumulatorRef = useRef(createEmptyRepAccumulator());
-  const repStateRef = useRef(freshRepState());
+  const repMachineRef = useRef(createRepMachine());
+  const lockoutStallRef = useRef({ since: 0, cued: false });
+  /** Plank posture of the latest pose frame (body horizontal / arms straight). */
+  const postureRef = useRef<PlankPosture>(NO_POSTURE);
   const repCounterRef = useRef(createRepCounter());
   const attemptRepCountRef = useRef<Record<1 | 2, number>>({ 1: 0, 2: 0 });
   const frameHandlerRef = useRef<(landmarks: PosePoint[] | undefined, worldLandmarks?: PosePoint[]) => void>(() => undefined);
@@ -732,11 +736,9 @@ export default function App() {
         setShowGoOverlay(true);
         setActiveBanner(null);
         activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
-        repStateRef.current = freshRepState();
-        repAccumulatorRef.current = createEmptyRepAccumulator();
-        tempoStateRef.current = createTempoState(performance.now());
+        resetRepTracking();
         tempoLatencyRef.current = [];
-        pushLog('info', 'Countdown finished. Counting started.');
+        pushLog('info', 'Countdown finished. Hold the top of a push-up to start counting.');
         setCurrentCue('Go!');
         goOverlayTimerRef.current = window.setTimeout(() => {
           setShowGoOverlay(false);
@@ -749,6 +751,15 @@ export default function App() {
     };
 
     countdownTimerRef.current = window.setTimeout(startCountdown, announce ? 800 : 300);
+  };
+
+  /** Every set starts from nothing: no half-finished rep, no smoothing history, no tempo phase. */
+  const resetRepTracking = () => {
+    repMachineRef.current = createRepMachine();
+    lockoutStallRef.current = { since: 0, cued: false };
+    repAccumulatorRef.current = createEmptyRepAccumulator();
+    elbowSmootherRef.current.reset();
+    tempoStateRef.current = createTempoState(performance.now());
   };
 
   const clearSessionData = () => {
@@ -769,10 +780,8 @@ export default function App() {
     attemptRepCountRef.current = { 1: 0, 2: 0 };
     feedbackMemoryRef.current = createFeedbackMemory();
     spokenFormCueRef.current = { key: null, at: 0 };
-    repAccumulatorRef.current = createEmptyRepAccumulator();
-    repStateRef.current = freshRepState();
+    resetRepTracking();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
-    elbowSmootherRef.current.reset();
     plankReferenceRef.current = {};
     setRestStartedAt(null);
     setRestBypassed(false);
@@ -1051,7 +1060,7 @@ export default function App() {
     if (!tempoCuesActive()) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     // A rep that reached the bottom completes at this lockout; if it's the set's last, no Down follows.
-    const repsAfterThisTop = attempt ? attemptRepCountRef.current[attempt] + (repStateRef.current.sawBottom ? 1 : 0) : 0;
+    const repsAfterThisTop = attempt ? attemptRepCountRef.current[attempt] + (repMachineRef.current.sawBottom ? 1 : 0) : 0;
     const step = stepTempo(tempoStateRef.current, {
       elbowAngle: frame.elbowAngle,
       depthScore: frame.elbowDepthScore,
@@ -1108,57 +1117,55 @@ export default function App() {
     const { elbowAngle, confidence } = frame;
     const now = Date.now();
     if (confidence < MIN_SIGNAL) return;
-    stepTempoCues(frame);
+    const previous = repMachineRef.current;
+    // No Up/Down while they're still getting into position.
+    if (previous.armed) stepTempoCues(frame);
 
-    const state = repStateRef.current;
-    const topThreshold = REP_TOP_ANGLE;
-    const downThreshold = REP_BOTTOM_ANGLE;
+    const posture = postureRef.current;
+    const step = stepRep(previous, { elbowAngle, horizontal: posture.horizontal, now });
+    repMachineRef.current = step.state;
+    if (step.accumulate) repAccumulatorRef.current = addRepFrame(repAccumulatorRef.current, frame, REP_BOTTOM_ANGLE);
 
-    if (!state.sawTop) {
-      state.topStableFrames = elbowAngle >= topThreshold ? state.topStableFrames + 1 : 0;
-      if (state.topStableFrames >= 3) {
-        state.sawTop = true;
-        state.sawBottom = false;
-        state.bottomStableFrames = 0;
+    switch (step.event) {
+      case 'armed':
         repAccumulatorRef.current = createEmptyRepAccumulator();
-        pushLog('system', 'Top position locked in.');
-      }
-      return;
+        pushLog('system', 'Top position locked in. Counting reps.');
+        return;
+      case 'top':
+        repAccumulatorRef.current = createEmptyRepAccumulator();
+        return;
+      case 'disarmed':
+        repAccumulatorRef.current = createEmptyRepAccumulator();
+        lockoutStallRef.current = { since: 0, cued: false };
+        tempoStateRef.current = createTempoState(performance.now());
+        pushLog('info', `Left the plank (${posture.reason}). Hold the top of a push-up to count again.`);
+        return;
+      case 'rejected-fast':
+      case 'rejected-posture':
+        repAccumulatorRef.current = createEmptyRepAccumulator();
+        lockoutStallRef.current = { since: 0, cued: false };
+        pushLog(
+          'info',
+          step.event === 'rejected-fast'
+            ? `Rep not counted: down and up in ${repInProgressMs(previous, now)} ms is too fast to be real.`
+            : 'Rep not counted: the body wasn’t in a plank for most of it.',
+        );
+        return;
+      case 'rep':
+        lockoutStallRef.current = { since: 0, cued: false };
+        finishRep(frame);
+        return;
+      default:
+        break;
     }
 
-    repAccumulatorRef.current = addRepFrame(repAccumulatorRef.current, frame, downThreshold);
-
-    if (elbowAngle <= downThreshold) {
-      state.bottomStableFrames += 1;
-      state.topStableFrames = 0;
-      if (state.bottomStableFrames >= 3) {
-        state.sawBottom = true;
-      }
-    } else if (elbowAngle >= topThreshold) {
-      state.topStableFrames += 1;
-      state.bottomStableFrames = 0;
-    } else {
-      state.topStableFrames = 0;
-      state.bottomStableFrames = 0;
-    }
-
-    const stalledShort = state.sawBottom && elbowAngle >= LOCKOUT_STALL_MIN_ANGLE && elbowAngle < topThreshold;
-    state.stallSince = stalledShort ? state.stallSince || now : 0;
-    if (stalledShort && !state.lockoutCued && now - state.stallSince >= LOCKOUT_STALL_MS && feedbackModeRef.current !== 'control') {
-      state.lockoutCued = true;
+    const stall = lockoutStallRef.current;
+    const stalledShort = step.state.sawBottom && elbowAngle >= LOCKOUT_STALL_MIN_ANGLE && elbowAngle < REP_TOP_ANGLE;
+    stall.since = stalledShort ? stall.since || now : 0;
+    if (stalledShort && !stall.cued && now - stall.since >= LOCKOUT_STALL_MS && feedbackModeRef.current !== 'control') {
+      stall.cued = true;
       if (currentModeAllows().visuals) holdCue(CORRECTIVE_LINES.lockout[0], 2000);
       speakFormCue('lockout');
-    }
-
-    if (state.sawBottom && state.topStableFrames >= 3 && now - state.lastRepAt > 550) {
-      state.lastRepAt = now;
-      state.sawTop = false;
-      state.sawBottom = false;
-      state.topStableFrames = 0;
-      state.bottomStableFrames = 0;
-      state.stallSince = 0;
-      state.lockoutCued = false;
-      finishRep(frame);
     }
   };
 
@@ -1518,12 +1525,14 @@ export default function App() {
       const size = currentFrameSize();
       const aspect = size ? size.width / size.height : 0.75;
       const plankReference = plankReferenceRef.current;
-      const frame = analyzePose(landmarks, cameraView, { worldLandmarks, aspect, plankReference });
-      const inPlank = calibrationStateRef.current !== 'idle' && calibrationStateRef.current !== 'checking';
-      if (cameraView === 'head-on' && inPlank && frame.confidence >= 0.72 && frame.elbowAngle >= REP_TOP_ANGLE) {
+      const frame = applyBaselineBias(analyzePose(landmarks, cameraView, { worldLandmarks, aspect, plankReference }));
+      const posture = plankPosture(landmarks, cameraView, aspect, frame.elbowAngle);
+      postureRef.current = posture;
+      const inPlank = calibrationStateRef.current !== 'idle' && calibrationStateRef.current !== 'checking' && !isResting() && posture.atTop;
+      if (cameraView === 'head-on' && inPlank && frame.confidence >= 0.72) {
         plankReferenceRef.current = updatePlankReference(plankReference, landmarks, aspect);
       }
-      processAnalysis(applyBaselineBias(frame));
+      processAnalysis(frame);
     };
   });
 
@@ -1637,8 +1646,7 @@ export default function App() {
   const startSetTwo = () => {
     if (restLocked) return;
     attemptRepCountRef.current[2] = 0;
-    repStateRef.current = freshRepState();
-    repAccumulatorRef.current = createEmptyRepAccumulator();
+    resetRepTracking();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
     setTrialState('attempt-2');
     setPaused(false);
