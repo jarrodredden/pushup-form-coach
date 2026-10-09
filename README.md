@@ -148,7 +148,11 @@ The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
 - Camera access needs a secure context: the https Vercel link, `localhost`, or the offline package opened as a local file.
 - Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts. The Up / Down tempo cues bypass that queue (see above).
 - Head-on is the recommended setup. Use Side only with room for a tripod about 2 m away.
-- The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on stream metadata/resize, window resize, and orientation change, so the skeleton always sits on the person.
+- The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on every frame and on stream, stage, viewport, and orientation changes, so the skeleton always sits on the person.
+  - The preview box itself has a fixed size per screen (full width; a shorter height during the rest) that never depends on the video.
+  - iOS can report a stale stream size (landscape while it paints portrait frames) and can keep the previous screen's video fit. The app therefore also checks the size of an actual rendered frame, and on iPhone/iPad it re-attaches the stream when the preview box changes size (set ↔ rest) or the phone rotates.
+  - A watchdog checks 10 times a second. If the video covers less than 95% of the box, or the reported size disagrees with the rendered frame, for 300 ms it re-lays out the preview; if that doesn't help within 1.5 s it re-attaches the stream (at most twice per camera start).
+  - Admin → Diagnostics → **Camera preview numbers** shows the stage size, stream sizes from each source, the drawn video rect, and how much of the box it covers, on the camera screen. It also turns on by itself if the watchdog had to step in. The same numbers are written to the Diagnostics log on every screen change, so a screenshot of either is enough to debug a bad preview.
 
 ## Privacy
 

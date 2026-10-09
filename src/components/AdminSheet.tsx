@@ -25,6 +25,8 @@ interface AdminSheetProps {
   live: PoseAnalysis | null;
   logs: LogEntry[];
   reps: SessionRep[];
+  stageDiagnostics: boolean;
+  onStageDiagnosticsChange: (on: boolean) => void;
   consentSettings: ConsentSettings;
   onConsentSettingsChange: (settings: ConsentSettings) => void;
   pendingConsentCount: number;
@@ -101,7 +103,15 @@ export function AdminSheet(props: AdminSheetProps) {
 
           {tab === 'standards' ? <StandardsEditor {...props} /> : null}
           {tab === 'consent' ? <ConsentSettingsEditor {...props} /> : null}
-          {tab === 'diagnostics' ? <Diagnostics logs={props.logs} reps={props.reps} live={props.live} /> : null}
+          {tab === 'diagnostics' ? (
+            <Diagnostics
+              logs={props.logs}
+              reps={props.reps}
+              live={props.live}
+              stageDiagnostics={props.stageDiagnostics}
+              onStageDiagnosticsChange={props.onStageDiagnosticsChange}
+            />
+          ) : null}
 
           <button className="btn btn--ghost btn--block" onClick={props.onLock}>
             <LockIcon /> Sign out admin
@@ -322,9 +332,34 @@ export function PlankDebugList({ reps }: { reps: SessionRep[] }) {
   );
 }
 
-function Diagnostics({ logs, reps, live }: { logs: LogEntry[]; reps: SessionRep[]; live: PoseAnalysis | null }) {
+function Diagnostics({
+  logs,
+  reps,
+  live,
+  stageDiagnostics,
+  onStageDiagnosticsChange,
+}: {
+  logs: LogEntry[];
+  reps: SessionRep[];
+  live: PoseAnalysis | null;
+  stageDiagnostics: boolean;
+  onStageDiagnosticsChange: (on: boolean) => void;
+}) {
   return (
     <div className="log-list">
+      <label className="switch-row">
+        <span className="switch-row__text">
+          <strong>Camera preview numbers</strong>
+          <span>Shows stage size, stream size, and the drawn video rect on the camera screen (admin only). Turns on by itself if the preview watchdog has to fix the layout.</span>
+        </span>
+        <input
+          type="checkbox"
+          role="switch"
+          className="switch"
+          checked={stageDiagnostics}
+          onChange={(event) => onStageDiagnosticsChange(event.target.checked)}
+        />
+      </label>
       <div className="placement-note">
         <strong>Plank line (raw, per rep)</strong>
         <p>

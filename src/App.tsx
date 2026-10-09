@@ -40,7 +40,20 @@ import {
 } from './lib/consent';
 import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
-import { coverLayout, sameLayout, toStagePoint, type StageLayout } from './lib/stageLayout';
+import {
+  COVERAGE_MIN,
+  coverLayout,
+  createWatchdog,
+  describeStage,
+  isIOSDevice,
+  pickFrameSize,
+  sameLayout,
+  stageCoverage,
+  stepWatchdog,
+  toStagePoint,
+  type Size,
+  type StageLayout,
+} from './lib/stageLayout';
 import {
   createFormColorState,
   depthPulseActive,
@@ -121,6 +134,10 @@ const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
 const ADMIN_UNLOCK_KEY = 'pushup-admin-pin-unlocked';
+const STAGE_DIAG_KEY = 'pushup-admin-stage-diagnostics';
+const IS_IOS = typeof navigator !== 'undefined' && isIOSDevice(navigator);
+/** Watchdog re-attaches allowed per camera stream, so a stubborn device can't flicker forever. */
+const MAX_WATCHDOG_REATTACHES = 2;
 const ADMIN_PIN = '180180';
 const RESULTS_UPLOAD_URL =
   (import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined) ??
@@ -229,6 +246,15 @@ export default function App() {
   const formColorStateRef = useRef<FormColorState>(createFormColorState());
   const stageDprRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
+  const streamSettingsRef = useRef<Size | null>(null);
+  const frameMetaRef = useRef<Size | null>(null);
+  const frameMetaAtRef = useRef(0);
+  const bitmapSizeRef = useRef<Size | null>(null);
+  const watchdogRef = useRef(createWatchdog());
+  const watchdogReattachesRef = useRef(0);
+  const stageFixesRef = useRef(0);
+  const stageDiagRef = useRef<HTMLPreElement | null>(null);
+  const phaseRef = useRef('');
   const poseRef = useRef<PoseLandmarker | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -286,6 +312,8 @@ export default function App() {
   const [restNow, setRestNow] = useState(() => Date.now());
   const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem(ADMIN_UNLOCK_KEY) === '1');
   const [adminOpen, setAdminOpen] = useState(false);
+  const [stageDiagPinned, setStageDiagPinned] = useState(() => localStorage.getItem(STAGE_DIAG_KEY) === '1');
+  const [stageDiagTripped, setStageDiagTripped] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [uploadState, setUploadState] = useState<UploadState>('idle');
@@ -479,6 +507,7 @@ export default function App() {
     trialState: coachingTrialState,
     hasResults: sessionReps.length > 0,
   });
+  phaseRef.current = phase;
   const steps = journeySteps(workflowMode);
   const stepKey = activeStepKey(phase, workflowMode, coachingTrialState, Boolean(athleteName.trim()));
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
@@ -1182,17 +1211,86 @@ export default function App() {
     updateRepState(frame);
   };
 
+  /** The stream size the preview is laid out with (see pickFrameSize for why it isn't just videoWidth). */
+  const currentFrameSize = () => {
+    const video = videoRef.current;
+    if (!video) return null;
+    return pickFrameSize({
+      element: { width: video.videoWidth, height: video.videoHeight },
+      frame: frameMetaRef.current,
+      bitmap: bitmapSizeRef.current,
+      settings: streamSettingsRef.current,
+    });
+  };
+
+  const probeBitmapSize = async () => {
+    const video = videoRef.current;
+    if (!video || !runningRef.current || video.readyState < 2 || typeof createImageBitmap !== 'function') return;
+    try {
+      const bitmap = await createImageBitmap(video);
+      if (bitmap.width > 0 && bitmap.height > 0) bitmapSizeRef.current = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+    } catch {
+      // Some WebKit builds can't snapshot a camera stream; requestVideoFrameCallback covers those.
+    }
+  };
+
+  /** Re-attaching srcObject makes WebKit rebuild the video layer and re-read the stream size. */
+  const reattachStream = (reason: string) => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream || !runningRef.current) return;
+    frameMetaRef.current = null;
+    bitmapSizeRef.current = null;
+    video.srcObject = null;
+    video.srcObject = stream;
+    void video.play().catch(() => undefined);
+    stageLayoutRef.current = null;
+    layoutStage();
+    window.setTimeout(() => void probeBitmapSize(), 300);
+    pushLog('system', `Camera preview re-attached (${reason}).`, stageDiagnosticsText());
+  };
+
+  const stageDiagnosticsText = () => {
+    const video = videoRef.current;
+    const stage = stageRef.current;
+    if (!video || !stage) return '';
+    const stageBox = stage.getBoundingClientRect();
+    const inner = { left: stageBox.left + stage.clientLeft, top: stageBox.top + stage.clientTop, width: stage.clientWidth, height: stage.clientHeight };
+    const box = video.getBoundingClientRect();
+    const videoRect = { left: box.left - inner.left, top: box.top - inner.top, width: box.width, height: box.height };
+    return describeStage({
+      phase: phaseRef.current,
+      fixes: stageFixesRef.current,
+      stage: { width: inner.width, height: inner.height },
+      stream: currentFrameSize(),
+      element: { width: video.videoWidth, height: video.videoHeight },
+      frame: frameMetaRef.current,
+      bitmap: bitmapSizeRef.current,
+      settings: streamSettingsRef.current,
+      videoRect,
+      coverage: stageCoverage(videoRect, { left: 0, top: 0, width: inner.width, height: inner.height }),
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      visualViewport: window.visualViewport ? { width: window.visualViewport.width, height: window.visualViewport.height } : null,
+      dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
+      orientation: screen.orientation?.type ?? (window.innerWidth > window.innerHeight ? 'landscape' : 'portrait'),
+      readyState: video.readyState,
+      paused: video.paused,
+    });
+  };
+
   /**
    * Sizes the video and the overlay from one cover transform of the stream into the stage. Runs on
-   * stream metadata/resize, stage resize, window resize, and orientation change, and is re-checked
-   * every frame so a size change can never leave the two layers out of step.
+   * every pose-loop tick, every watchdog tick, and on stream/stage/viewport/orientation changes, so a
+   * size change can never leave the two layers out of step.
    */
   const layoutStage = () => {
     const stage = stageRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!stage || !video || !canvas) return null;
-    const next = coverLayout(stage.clientWidth, stage.clientHeight, video.videoWidth, video.videoHeight);
+    const size = currentFrameSize();
+    const next = coverLayout(stage.clientWidth, stage.clientHeight, size?.width ?? 0, size?.height ?? 0);
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     if (sameLayout(next, stageLayoutRef.current) && dpr === stageDprRef.current) return next;
     stageLayoutRef.current = next;
@@ -1300,28 +1398,142 @@ export default function App() {
     };
     const onOrientation = () => {
       relayout();
-      // iOS reports the new viewport a beat after the event.
-      window.setTimeout(relayout, 250);
+      // iOS reports the new viewport a beat after the event, and its video layer can keep the old fit.
+      window.setTimeout(() => {
+        relayout();
+        if (IS_IOS) reattachStream('orientation change');
+      }, 300);
     };
-    video.addEventListener('loadedmetadata', relayout);
-    video.addEventListener('resize', relayout);
+    const onStreamResize = () => {
+      // The decoded-frame readings belong to the old size until the next frame/probe.
+      frameMetaRef.current = null;
+      bitmapSizeRef.current = null;
+      relayout();
+      window.setTimeout(() => void probeBitmapSize(), 150);
+    };
+    video.addEventListener('loadedmetadata', onStreamResize);
+    video.addEventListener('resize', onStreamResize);
     window.addEventListener('resize', relayout);
     window.addEventListener('orientationchange', onOrientation);
+    window.visualViewport?.addEventListener('resize', relayout);
+    screen.orientation?.addEventListener?.('change', onOrientation);
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(relayout);
     observer?.observe(stage);
     return () => {
-      video.removeEventListener('loadedmetadata', relayout);
-      video.removeEventListener('resize', relayout);
+      video.removeEventListener('loadedmetadata', onStreamResize);
+      video.removeEventListener('resize', onStreamResize);
       window.removeEventListener('resize', relayout);
       window.removeEventListener('orientationchange', onOrientation);
+      window.visualViewport?.removeEventListener('resize', relayout);
+      screen.orientation?.removeEventListener?.('change', onOrientation);
       observer?.disconnect();
     };
+    // layoutStage and reattachStream only read refs, so the first render's copies stay correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const showStageDiag = adminUnlocked && (stageDiagPinned || stageDiagTripped);
+
+  useEffect(() => {
+    localStorage.setItem(STAGE_DIAG_KEY, stageDiagPinned ? '1' : '0');
+  }, [stageDiagPinned]);
+
+  // Decoded-frame size probes plus the preview watchdog, for as long as the camera is live.
+  useEffect(() => {
+    if (cameraStatus !== 'live') return;
+    const video = videoRef.current;
+    const stage = stageRef.current;
+    if (!video || !stage) return;
+    let cancelled = false;
+    let frameHandle: number | null = null;
+    const watchFrames = () => {
+      if (typeof video.requestVideoFrameCallback !== 'function') return;
+      if (frameHandle !== null) video.cancelVideoFrameCallback(frameHandle);
+      const onFrame: VideoFrameRequestCallback = (_now, meta) => {
+        if (cancelled) return;
+        if (meta.width > 0 && meta.height > 0) frameMetaRef.current = { width: meta.width, height: meta.height };
+        frameMetaAtRef.current = performance.now();
+        frameHandle = video.requestVideoFrameCallback(onFrame);
+      };
+      frameMetaAtRef.current = performance.now();
+      frameHandle = video.requestVideoFrameCallback(onFrame);
+    };
+    watchFrames();
+    const probes = [400, 1200, 2500, 5000].map((ms) => window.setTimeout(() => void probeBitmapSize(), ms));
+    const probeTimer = window.setInterval(() => void probeBitmapSize(), 5000);
+
+    let ticks = 0;
+    let lastElement = '';
+    const tick = () => {
+      ticks += 1;
+      const now = performance.now();
+      // A re-attached stream can drop pending frame callbacks on some engines.
+      if (!video.paused && now - frameMetaAtRef.current > 1000) watchFrames();
+      const element = `${video.videoWidth}x${video.videoHeight}`;
+      if (element !== lastElement) {
+        if (lastElement) {
+          bitmapSizeRef.current = null;
+          window.setTimeout(() => void probeBitmapSize(), 150);
+        }
+        lastElement = element;
+      }
+      const layout = layoutStage();
+      if (!stage.clientWidth || !stage.clientHeight) {
+        watchdogRef.current = createWatchdog();
+        return;
+      }
+      const stageBox = stage.getBoundingClientRect();
+      const inner = { left: stageBox.left + stage.clientLeft, top: stageBox.top + stage.clientTop, width: stage.clientWidth, height: stage.clientHeight };
+      const coverage = stageCoverage(video.getBoundingClientRect(), inner);
+      const size = currentFrameSize();
+      const mismatch = !size || size.source !== 'element';
+      const bad = !layout || mismatch || coverage.x < COVERAGE_MIN || coverage.y < COVERAGE_MIN;
+      const step = stepWatchdog(watchdogRef.current, bad, now);
+      watchdogRef.current = step.state;
+      if (step.action === 'relayout') {
+        stageFixesRef.current += 1;
+        stageLayoutRef.current = null;
+        layoutStage();
+        setStageDiagTripped(true);
+        if (stageFixesRef.current <= 10) pushLog('system', 'Camera preview didn’t fill the stage; re-laid out.', stageDiagnosticsText());
+      } else if (step.action === 'reattach' && watchdogReattachesRef.current < MAX_WATCHDOG_REATTACHES) {
+        watchdogReattachesRef.current += 1;
+        stageFixesRef.current += 1;
+        reattachStream('watchdog');
+      }
+      if (stageDiagRef.current && ticks % 3 === 0) stageDiagRef.current.textContent = stageDiagnosticsText();
+    };
+    const watchdogTimer = window.setInterval(tick, 100);
+    return () => {
+      cancelled = true;
+      if (frameHandle !== null) video.cancelVideoFrameCallback?.(frameHandle);
+      probes.forEach((id) => window.clearTimeout(id));
+      window.clearInterval(probeTimer);
+      window.clearInterval(watchdogTimer);
+    };
+    // Everything it touches is a ref or a stable setter; it only needs to restart with the camera.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraStatus]);
+
+  // Screen changes resize the stage (the break shows a shorter preview). Log the numbers once the
+  // layout settles, and on iOS rebuild the video layer so it can't keep the previous screen's fit.
+  const previousPhaseRef = useRef(phase);
+  useEffect(() => {
+    const previous = previousPhaseRef.current;
+    previousPhaseRef.current = phase;
+    if (cameraStatus !== 'live' || previous === phase || !cameraActive) return;
+    const stageResized = (previous === 'break') !== (phase === 'break');
+    const timers: number[] = [];
+    if (IS_IOS && stageResized) timers.push(window.setTimeout(() => reattachStream(`${previous} → ${phase}`), 120));
+    timers.push(window.setTimeout(() => pushLog('info', `Preview on ${phase} screen.`, stageDiagnosticsText()), 700));
+    return () => timers.forEach((id) => window.clearTimeout(id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   useEffect(() => {
     frameHandlerRef.current = (landmarks, worldLandmarks) => {
-      const video = videoRef.current;
-      const aspect = video?.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 0.75;
+      const size = currentFrameSize();
+      const aspect = size ? size.width / size.height : 0.75;
       const plankReference = plankReferenceRef.current;
       const frame = analyzePose(landmarks, cameraView, { worldLandmarks, aspect, plankReference });
       const inPlank = calibrationStateRef.current !== 'idle' && calibrationStateRef.current !== 'checking';
@@ -1348,6 +1560,7 @@ export default function App() {
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    streamSettingsRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
@@ -1380,8 +1593,18 @@ export default function App() {
       });
       streamRef.current = stream;
       const settings = stream.getVideoTracks()[0]?.getSettings?.();
+      streamSettingsRef.current = settings?.width && settings.height ? { width: settings.width, height: settings.height } : null;
+      frameMetaRef.current = null;
+      bitmapSizeRef.current = null;
+      watchdogRef.current = createWatchdog();
+      watchdogReattachesRef.current = 0;
       if (settings?.width && settings.height) pushLog('info', `Camera stream ${settings.width}×${settings.height}.`);
       const video = videoRef.current;
+      // React only sets the muted property; iOS inline autoplay looks for the attributes.
+      video.muted = true;
+      video.setAttribute('muted', '');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
       video.srcObject = stream;
       await video.play();
       runningRef.current = true;
@@ -1391,6 +1614,7 @@ export default function App() {
       const loop = () => {
         if (!runningRef.current || !poseRef.current || !videoRef.current) return;
         const videoEl = videoRef.current;
+        layoutStage();
         if (videoEl.readyState >= 2) {
           const detectStartedAt = performance.now();
           const result = poseRef.current.detectForVideo(videoEl, detectStartedAt);
@@ -2010,8 +2234,17 @@ export default function App() {
       <main className="layout">
         <section className={cameraActive ? 'stage-col' : 'stage-col is-dormant'} aria-hidden={!cameraActive}>
           <div className="stage" ref={stageRef}>
-            <video ref={videoRef} className={previewMirrored ? 'stage__video mirror' : 'stage__video'} playsInline muted autoPlay />
+            <video
+              ref={videoRef}
+              className={previewMirrored ? 'stage__video mirror' : 'stage__video'}
+              playsInline
+              muted
+              autoPlay
+              disablePictureInPicture
+              controls={false}
+            />
             <canvas ref={canvasRef} className="stage__overlay" />
+            {showStageDiag ? <pre ref={stageDiagRef} className="stage__diag" aria-hidden="true" /> : null}
             <div className="stage__scrim" aria-hidden="true" />
 
             <div className="stage__top">
@@ -2193,6 +2426,8 @@ export default function App() {
         live={cameraStatus === 'live' ? analysis : null}
         logs={sessionLogs}
         reps={sessionReps}
+        stageDiagnostics={stageDiagPinned}
+        onStageDiagnosticsChange={setStageDiagPinned}
         consentSettings={consentSettings}
         onConsentSettingsChange={updateConsentSettings}
         pendingConsentCount={pendingConsents.length}
