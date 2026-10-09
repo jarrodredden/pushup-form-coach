@@ -59,7 +59,8 @@ How grading uses it: every metric is a 0–100 form score. A rep scoring at or a
 - **Weights** — Head-on: depth 45%, plank 22%, hands 13%, head 12%, elbows 8%. Side: depth 47%, plank 27%, hands 12%, head 8%, elbows 6%. Tucked elbows (30–50°) are always full credit, so tucking is never penalised twice.
 - **Control** — taken off the form score after the bottom is graded:
   - *Rushed:* a rep (leaving the top → back at the top) under 1.2 s loses up to 15 points (0.9 s → −8, 0.6 s → −15) with the note "Rushed — take about two seconds, down and up."
-  - *Lockout:* a top straighter than 165° costs nothing; softer lockouts lose up to 10 points (at 158°, the least a rep can count with) with "Straighten the arms fully at the top."
+  - *Lockout:* a top straighter than 165° costs nothing; softer lockouts lose up to 10 points (158° or softer loses all 10) with "Straighten the arms fully at the top." A soft lockout still counts as a rep.
+  - A rep whose frames were all too dim to read (low landmark confidence) still counts, scores 0, and says "Counted, but the body wasn't visible enough to score it."
 - **Set score** — the mean of the rep scores, minus a consistency deduction when reps vary: nothing up to a standard deviation of 2 points, then 0.6 points per extra point of spread, capped at 8. The results screen, Sheet row, and exports all use this set score.
 - A rep with full depth, a straight plank, hands and head in line, a 2 s tempo, and a full lockout scores 100.
 
@@ -68,16 +69,23 @@ Expected scores on synthetic reps (`src/lib/scoreDistribution.test.ts`, which ru
 | Volunteer | Bottom angle | Plank, hands, head | Tempo | Old | New |
 | --- | --- | --- | --- | --- | --- |
 | Perfect | 82° | straight, in line | 2.0 s | 98 / 88 | 100 / 100 |
-| Good | 95° ± 4 | small drift | 1.6 s | 88 / 79 | 90 / 90 |
-| Average | 106° ± 6 | some sag, drift | 1.2 s | 79 / 71 | 69 / 61 |
-| Sloppy | 112° | sag, hands and head off, flared | 0.85 s | 74 / 60 | 44 / 27 |
+| Good | 95° ± 4 | small drift | 1.6 s | 88 / 79 | 89 / 90 |
+| Average | 106° ± 6 | some sag, drift | 1.2 s | 79 / 71 | 65 / 63 |
+| Sloppy | 112° | sag, hands and head off, flared | 0.85 s | 74 / 60 | 41 / 27 |
+
+All four volunteers count all 5 reps; the counter never drops a rep for poor form.
 
 Admin **100 standards** still work the same way: a saved depth target maps through the new curve (target 100 ↔ 90°, 70 ↔ 100°), and target − tolerance still earns full credit.
 
-**Rep counting** (`src/lib/repGate.ts`) is separate from form, but only counts real push-ups:
-- Nothing counts before **Go**. Rep tracking (the rep state, elbow smoothing, the rep's frame buffer, and tempo cues) is reset at every set start.
-- The counter first has to see a steady plank top: body horizontal and arms straight for 6 frames and at least 0.5 s. Only then can top → bottom → top count. Getting down from kneeling (straight arms upright, bend, straighten into the plank) is therefore never a rep.
-- A cycle faster than 0.6 s, or one spent mostly out of a plank, is rejected and logged instead of counted. Standing or kneeling up for a while disarms the counter until the plank top is seen again.
+**Rep counting** (`src/lib/repGate.ts`) is fully separate from scoring: every real down-and-up cycle after **Go** counts, however poor the form. Form only changes the score.
+- The counter uses its own elbow angle: the true on-screen bend (corrected for the stream's aspect ratio, so portrait and landscape phones read the same), averaged over the visible arms (one arm is enough), median of 3 frames. Frames with low landmark confidence are still used.
+- Lines: a rep goes down once the arms bend below 130° (or 30° under the volunteer's own top, if their arms never read straight), and comes back up above 150° (lower for arms that never straighten, always at least 25° above the rep's lowest point). Two frames past each line are needed, so one glitched frame can't count.
+- Nothing counts before **Go**. Rep tracking (the rep state, smoothing, the rep's frame buffer, and tempo cues) is reset at every set start.
+- After Go, the counter arms once it sees the arms above 135° for 0.3 s, with at least two plank-like frames and none upright. The only thing it then guards against is the get-down false rep: it never arms while the volunteer is kneeling or standing up (hips well below the shoulders head-on, or the body steeper than 55° from the side), and after 0.7 s upright it pauses and waits for the top again. Getting down from kneeling (straight arms upright, bend, straighten into the plank) is therefore never a rep. Wrists or hips dropping out of view, or the shoulders dipping near hand level at the bottom, never pause it.
+- A cycle faster than 0.3 s (a tracking glitch) and a dip that only bends partway (at least 15° but not past the down line) are logged instead of counted.
+- **Admin → Diagnostics** logs every arm/disarm ("Counting paused…"), every rejected cycle with the reason and angle ("Rep not counted: bent only to 138°…"), and "Not counting yet…" if the counter still hasn't armed 3 s after Go. The camera readout (below) adds a live line: counter state, arm angle, the volunteer's top, and the down/up lines.
+- Tested on synthetic iPhone-like noisy sequences (`src/lib/noisyPoseFixtures.ts`: jitter, drift, glitched joints, dim wrists at the bottom, lost frames, uneven frame timing): 25 seeds each of set 1 (from a plank) and set 2 (kneel → get down → plank), poor light, landscape, and side view all count exactly 5.
+- Known limits: depth *scoring* still uses the raw (not aspect-corrected) elbow angle, so it is somewhat more lenient on portrait streams than landscape ones; from the side, strongly flared elbows read almost straight in 2D.
 
 **Coaching tips** (live cues and the Coach-step list) are ranked by expected overall-score gain: the metric's weight × its gap to 100, minus the expected loss on metrics the change tends to hurt. Going deeper tends to make a weak plank sag and weak elbows flare, so depth isn't pushed first when the plank or elbows are much weaker. Hip tips are directional: **Don't pike** (hips high) or **Don't sag** (hips low), never a vague "hips lower". Depth is phrased as "a little deeper while keeping hips level". The logic lives in `src/lib/coaching.ts`.
 
@@ -157,9 +165,10 @@ The offline package is no longer linked from the app or deployed: `npm run build
 - The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on every frame and on stream, stage, viewport, and orientation changes, so the skeleton always sits on the person.
   - The preview box itself has a fixed size per screen that never depends on the video. On phones, while the camera is live (calibrating, countdown, both sets, and "Get into your push-up position"), the progress bar is hidden and the box fills the screen between the top bar and the bottom button (`100svh` minus the header, dock, and safe areas; at least 380 px). At 390×797 that is 374×628, up from 358×585. The test-run and consent-skipped badges sit on the video instead of pushing it down. During the rest the box shrinks to a short strip.
   - On touch screens held in portrait, the camera is asked for 720×1280 (no aspect-ratio hint) instead of 1280×720, so phones send a portrait stream that fills the tall box without heavy cropping.
-  - iOS can report a stale stream size (landscape while it paints portrait frames) and can keep the previous screen's video fit. The app therefore also checks the size of an actual rendered frame, and on iPhone/iPad it re-attaches the stream when the preview box changes size (set ↔ rest) or the phone rotates.
-  - A watchdog checks 10 times a second. If the video covers less than 95% of the box, or the reported size disagrees with the rendered frame, for 300 ms it re-lays out the preview; if that doesn't help within 1.5 s it re-attaches the stream (at most twice per camera start).
-  - Admin → Diagnostics → **Camera preview numbers** shows the stage size, stream sizes from each source, the drawn video rect, and how much of the box it covers, on the camera screen. It also turns on by itself if the watchdog had to step in. The same numbers are written to the Diagnostics log on every screen change, so a screenshot of either is enough to debug a bad preview.
+  - The camera is requested once and the same stream stays attached through the rest and into set 2 (re-attaching it on iPhone could leave Safari drawing a letterboxed strip in set 2). Instead, on every screen change (set → rest → "Get into your push-up position" → set 2), rotation, `loadedmetadata`/`resize`, and track unmute, the app re-fits the video: it recomputes the layout from the current box and frame size and briefly toggles `object-fit` so WebKit drops any stale fit.
+  - iOS can report a stale stream size (landscape while it paints portrait frames) or switch the live track to landscape (e.g. 1280×720). The app checks the size of an actual rendered frame and polls the track's settings; when the track size changes it re-fits and logs "Camera track size changed A → B". A landscape track on a portrait phone is cover-cropped to fill the box, and the skeleton follows the same transform.
+  - A watchdog checks 10 times a second. If the video covers less than 95% of the box, or the reported size disagrees with the rendered frame, for 300 ms it re-lays out the preview; if that doesn't help within 1.5 s it re-attaches the stream as a last resort (at most twice per camera start).
+  - Admin → Diagnostics → **Camera preview numbers** shows the stage size, stream sizes from each source, the drawn video rect, how much of the box it covers, and the rep counter line. With Admin unlocked it appears by itself while framing, during countdowns, and on "Get into your push-up position", and whenever the watchdog had to step in. The same numbers are written to the Diagnostics log on every screen change, so a screenshot of either is enough to debug a bad preview.
 
 ## Privacy
 
