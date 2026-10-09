@@ -4,8 +4,10 @@ import {
   coverLayout,
   createWatchdog,
   describeStage,
+  fitStage,
   isIOSDevice,
   pickFrameSize,
+  sameLayout,
   prefersPortraitCamera,
   stageCoverage,
   stepWatchdog,
@@ -148,5 +150,65 @@ describe('stream size and watchdog', () => {
     expect(text).toContain('stream 720×1280 [bitmap] · el 1280×720');
     expect(text).toContain('bmp –');
     expect(text).toContain('video 390×693 @ 0,-46 · covers 100%×100%');
+  });
+});
+
+describe('rest → set 2 and track changes (iPhone letterbox regression)', () => {
+  const REST = { width: 358, height: 239 };
+  const SET_TWO = { width: 374, height: 628 };
+  const PORTRAIT = { width: 720, height: 1280 };
+  const LANDSCAPE = { width: 1280, height: 720 };
+  /** The video rect covers the whole stage: no bars on any side. */
+  const covers = (layout: ReturnType<typeof coverLayout>, stage: { width: number; height: number }) => {
+    expect(layout).not.toBeNull();
+    const c = stageCoverage({ left: layout!.offsetX, top: layout!.offsetY, width: layout!.width, height: layout!.height }, { left: 0, top: 0, ...stage });
+    expect(c.x).toBeGreaterThanOrEqual(0.999);
+    expect(c.y).toBeGreaterThanOrEqual(0.999);
+  };
+
+  it('re-fits when the stage grows from the short rest preview to the tall set 2 stage', () => {
+    const rest = fitStage(REST, { element: PORTRAIT }).layout!;
+    covers(rest, REST);
+    const setTwo = fitStage(SET_TWO, { element: PORTRAIT }).layout!;
+    expect(sameLayout(rest, setTwo)).toBe(false);
+    covers(setTwo, SET_TWO);
+    // The rest layout applied to the set 2 stage is exactly the reported strip with black below.
+    const stale = stageCoverage({ left: rest.offsetX, top: rest.offsetY, width: rest.width, height: rest.height }, { left: 0, top: 0, ...SET_TWO });
+    expect(stale.y).toBeLessThan(0.75);
+  });
+
+  it('cover-crops a landscape track on a portrait phone stage, and keeps the overlay on the same pixels', () => {
+    const { layout, stream } = fitStage(SET_TWO, { element: LANDSCAPE, settings: LANDSCAPE });
+    expect(stream).toMatchObject({ ...LANDSCAPE, source: 'element' });
+    covers(layout, SET_TWO);
+    expect(layout!.height).toBeCloseTo(SET_TWO.height);
+    expect(layout!.offsetX).toBeLessThan(0);
+    // Frame centre on the stage centre; frame edges cropped evenly off both sides; mirroring flips about the centre.
+    expect(toStagePoint({ x: 0.5, y: 0.5 }, layout!, false)).toEqual({ x: SET_TWO.width / 2, y: SET_TWO.height / 2 });
+    const left = toStagePoint({ x: 0, y: 0 }, layout!, false);
+    const right = toStagePoint({ x: 1, y: 1 }, layout!, false);
+    expect(left.x).toBeCloseTo(SET_TWO.width - right.x);
+    expect(toStagePoint({ x: 0.3, y: 0.4 }, layout!, true).x).toBeCloseTo(SET_TWO.width - toStagePoint({ x: 0.3, y: 0.4 }, layout!, false).x);
+  });
+
+  it('follows the track when it switches shape mid-session (portrait → landscape → portrait)', () => {
+    for (const element of [PORTRAIT, LANDSCAPE, PORTRAIT]) {
+      const { layout } = fitStage(SET_TWO, { element, settings: element });
+      covers(layout, SET_TWO);
+      expect(layout!.width / layout!.height).toBeCloseTo(element.width / element.height, 3);
+    }
+  });
+
+  it('after a track switch where the element still reports the old portrait size, the rendered landscape frame wins', () => {
+    const { layout, stream } = fitStage(SET_TWO, { element: PORTRAIT, bitmap: LANDSCAPE, settings: LANDSCAPE });
+    expect(stream?.source).toBe('bitmap');
+    covers(layout, SET_TWO);
+    expect(layout!.width).toBeGreaterThan(SET_TWO.width);
+  });
+
+  it('lays out from the track settings while the element reports 0×0 right after a change', () => {
+    const { layout, stream } = fitStage(SET_TWO, { element: { width: 0, height: 0 }, settings: LANDSCAPE });
+    expect(stream?.source).toBe('settings');
+    covers(layout, SET_TWO);
   });
 });

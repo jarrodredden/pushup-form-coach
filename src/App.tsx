@@ -42,10 +42,9 @@ import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './li
 import { shouldMirrorPreview } from './lib/mirroring';
 import {
   COVERAGE_MIN,
-  coverLayout,
+  fitStage,
   createWatchdog,
   describeStage,
-  isIOSDevice,
   pickFrameSize,
   prefersPortraitCamera,
   sameLayout,
@@ -56,7 +55,7 @@ import {
   type StageLayout,
 } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
-import { countingElbowAngle, createRepTracker, plankPosture, REP_DOWN_ANGLE, REP_UP_ANGLE, trackRep, type PlankPosture, type RepStep } from './lib/repGate';
+import { countingElbowAngle, createRepTracker, plankPosture, REP_DOWN_ANGLE, REP_UP_ANGLE, repLines, trackRep, type PlankPosture, type RepStep } from './lib/repGate';
 import { AUTO_START_HOLD_MS, createPositionWatch, MANUAL_START_AFTER_MS, watchPosition } from './lib/autoStart';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
@@ -133,7 +132,6 @@ const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
 const ADMIN_UNLOCK_KEY = 'pushup-admin-pin-unlocked';
 const STAGE_DIAG_KEY = 'pushup-admin-stage-diagnostics';
-const IS_IOS = typeof navigator !== 'undefined' && isIOSDevice(navigator);
 /** Watchdog re-attaches allowed per camera stream, so a stubborn device can't flicker forever. */
 const MAX_WATCHDOG_REATTACHES = 2;
 const ADMIN_PIN = '180180';
@@ -1352,15 +1350,15 @@ export default function App() {
   };
 
   /** The stream size the preview is laid out with (see pickFrameSize for why it isn't just videoWidth). */
+  const frameSources = (video: HTMLVideoElement) => ({
+    element: { width: video.videoWidth, height: video.videoHeight },
+    frame: frameMetaRef.current,
+    bitmap: bitmapSizeRef.current,
+    settings: streamSettingsRef.current,
+  });
   const currentFrameSize = () => {
     const video = videoRef.current;
-    if (!video) return null;
-    return pickFrameSize({
-      element: { width: video.videoWidth, height: video.videoHeight },
-      frame: frameMetaRef.current,
-      bitmap: bitmapSizeRef.current,
-      settings: streamSettingsRef.current,
-    });
+    return video ? pickFrameSize(frameSources(video)) : null;
   };
 
   const probeBitmapSize = async () => {
@@ -1385,10 +1383,39 @@ export default function App() {
     video.srcObject = null;
     video.srcObject = stream;
     void video.play().catch(() => undefined);
-    stageLayoutRef.current = null;
-    layoutStage();
+    refitVideo();
     window.setTimeout(() => void probeBitmapSize(), 300);
     pushLog('system', `Camera preview re-attached (${reason}).`, stageDiagnosticsText());
+  };
+
+  /**
+   * Fresh layout from the current stage and stream sizes, and make WebKit re-apply object-fit: cover.
+   * Its camera video layer can keep an old fit (or fall back to letterboxing) after the element or the
+   * stream changes size, and only rebuilds it on a style change. Cheap; the stream itself is untouched.
+   */
+  const refitVideo = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    stageLayoutRef.current = null;
+    layoutStage();
+    video.style.objectFit = 'fill';
+    void video.offsetWidth;
+    video.style.objectFit = '';
+    void probeBitmapSize();
+  };
+
+  /** The rep counter's state for the admin readout: why a rep is or isn't counting right now. */
+  const repDiagnosticsText = () => {
+    const machine = repTrackerRef.current.machine;
+    const { step, note } = repDiagRef.current;
+    const posture = postureRef.current;
+    const angle = step?.angle;
+    const lines = repLines(machine);
+    const state = calibrationStateRef.current !== 'counting' || isResting() ? 'idle' : machine.armed ? machine.phase : 'waiting for the top';
+    return [
+      `reps ${state} · arms ${angle === null || angle === undefined ? '–' : `${Math.round(angle)}°`} · top ${Math.round(machine.topAngle)}° · down ≤${Math.round(lines.down)}° up ≥${Math.round(lines.up)}°`,
+      `pose ${posture.upright ? 'upright' : posture.horizontal ? 'plank' : posture.reason}${note ? ` · ${note}` : ''}`,
+    ].join('\n');
   };
 
   const stageDiagnosticsText = () => {
@@ -1429,8 +1456,7 @@ export default function App() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!stage || !video || !canvas) return null;
-    const size = currentFrameSize();
-    const next = coverLayout(stage.clientWidth, stage.clientHeight, size?.width ?? 0, size?.height ?? 0);
+    const next = fitStage({ width: stage.clientWidth, height: stage.clientHeight }, frameSources(video)).layout;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     if (sameLayout(next, stageLayoutRef.current) && dpr === stageDprRef.current) return next;
     stageLayoutRef.current = next;
@@ -1498,10 +1524,7 @@ export default function App() {
     const onOrientation = () => {
       relayout();
       // iOS reports the new viewport a beat after the event, and its video layer can keep the old fit.
-      window.setTimeout(() => {
-        relayout();
-        if (IS_IOS) reattachStream('orientation change');
-      }, 300);
+      window.setTimeout(refitVideo, 300);
     };
     const onStreamResize = () => {
       // The decoded-frame readings belong to the old size until the next frame/probe.
@@ -1531,7 +1554,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const showStageDiag = adminUnlocked && (stageDiagPinned || stageDiagTripped);
+  // Admin always gets the numbers while framing, counting down, and getting into position; in sets when pinned or tripped.
+  const showStageDiag =
+    adminUnlocked && (stageDiagPinned || stageDiagTripped || phase === 'calibrating' || phase === 'countdown' || (phase === 'break' && positionWaitSince !== null));
 
   useEffect(() => {
     localStorage.setItem(STAGE_DIAG_KEY, stageDiagPinned ? '1' : '0');
@@ -1568,10 +1593,23 @@ export default function App() {
       const now = performance.now();
       // A re-attached stream can drop pending frame callbacks on some engines.
       if (!video.paused && now - frameMetaAtRef.current > 1000) watchFrames();
+      // A track can change size mid-stream (iOS switching to the sensor's landscape shape, say).
+      const settings = streamRef.current?.getVideoTracks()[0]?.getSettings?.();
+      const known = streamSettingsRef.current;
+      if (settings?.width && settings.height && (settings.width !== known?.width || settings.height !== known?.height)) {
+        streamSettingsRef.current = { width: settings.width, height: settings.height };
+        if (known) {
+          frameMetaRef.current = null;
+          bitmapSizeRef.current = null;
+          refitVideo();
+          pushLog('system', `Camera track size changed ${known.width}×${known.height} → ${settings.width}×${settings.height}.`, stageDiagnosticsText());
+        }
+      }
       const element = `${video.videoWidth}x${video.videoHeight}`;
       if (element !== lastElement) {
         if (lastElement) {
           bitmapSizeRef.current = null;
+          refitVideo();
           window.setTimeout(() => void probeBitmapSize(), 150);
         }
         lastElement = element;
@@ -1600,7 +1638,7 @@ export default function App() {
         stageFixesRef.current += 1;
         reattachStream('watchdog');
       }
-      if (stageDiagRef.current && ticks % 3 === 0) stageDiagRef.current.textContent = stageDiagnosticsText();
+      if (stageDiagRef.current && ticks % 3 === 0) stageDiagRef.current.textContent = `${stageDiagnosticsText()}\n${repDiagnosticsText()}`;
     };
     const watchdogTimer = window.setInterval(tick, 100);
     return () => {
@@ -1614,16 +1652,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraStatus]);
 
-  // Screen changes resize the stage (the break shows a shorter preview). Log the numbers once the
-  // layout settles, and on iOS rebuild the video layer so it can't keep the previous screen's fit.
+  // Screen changes resize the stage (the rest shows a shorter preview, set 2 a tall one again). The
+  // stream stays attached across them (re-attaching it made iOS letterbox set 2): re-fit the video as
+  // the new size settles, then log the numbers.
   const screenKey = stageCompact ? `${phase} (compact)` : phase;
-  const previousScreenRef = useRef({ key: screenKey, compact: stageCompact });
+  const previousScreenRef = useRef(screenKey);
   useEffect(() => {
     const previous = previousScreenRef.current;
-    previousScreenRef.current = { key: screenKey, compact: stageCompact };
-    if (cameraStatus !== 'live' || previous.key === screenKey || !cameraActive) return;
-    const timers: number[] = [];
-    if (IS_IOS && previous.compact !== stageCompact) timers.push(window.setTimeout(() => reattachStream(`${previous.key} → ${screenKey}`), 120));
+    previousScreenRef.current = screenKey;
+    if (cameraStatus !== 'live' || previous === screenKey || !cameraActive) return;
+    const timers = [0, 120, 400].map((ms) => window.setTimeout(refitVideo, ms));
     timers.push(window.setTimeout(() => pushLog('info', `Preview on ${screenKey} screen.`, stageDiagnosticsText()), 700));
     return () => timers.forEach((id) => window.clearTimeout(id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1698,7 +1736,17 @@ export default function App() {
           : { facingMode: { ideal: cameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 16 / 9 } },
       });
       streamRef.current = stream;
-      const settings = stream.getVideoTracks()[0]?.getSettings?.();
+      const track = stream.getVideoTracks()[0];
+      // iOS mutes the camera during interruptions (Control Center, a call); the layer may need a re-fit after.
+      track?.addEventListener('mute', () => pushLog('system', 'Camera track muted (interrupted).', stageDiagnosticsText()));
+      track?.addEventListener('unmute', () => {
+        refitVideo();
+        pushLog('system', 'Camera track resumed.', stageDiagnosticsText());
+      });
+      track?.addEventListener('ended', () => {
+        if (streamRef.current === stream) pushLog('system', 'Camera track ended by the browser.', stageDiagnosticsText());
+      });
+      const settings = track?.getSettings?.();
       streamSettingsRef.current = settings?.width && settings.height ? { width: settings.width, height: settings.height } : null;
       frameMetaRef.current = null;
       bitmapSizeRef.current = null;

@@ -64,7 +64,7 @@ const isPortrait = (size: Size) => size.height > size.width;
  * disagrees on orientation, trust it: that's what's painted. requestVideoFrameCallback metadata can
  * describe the raw sensor buffer before rotation, so it can veto an override but never cause one.
  */
-export function pickFrameSize(sources: { element?: Size | null; frame?: Size | null; bitmap?: Size | null; settings?: Size | null }): (Size & { source: FrameSizeSource }) | null {
+export function pickFrameSize(sources: FrameSources): (Size & { source: FrameSizeSource }) | null {
   const decoded: Array<[FrameSizeSource, Size | null | undefined]> = [
     ['bitmap', sources.bitmap],
     ['frame', sources.frame],
@@ -82,6 +82,23 @@ export function pickFrameSize(sources: { element?: Size | null; frame?: Size | n
     if (usable(size)) return { width: size.width, height: size.height, source };
   }
   return null;
+}
+
+export interface FrameSources {
+  element?: Size | null;
+  frame?: Size | null;
+  bitmap?: Size | null;
+  settings?: Size | null;
+}
+
+/**
+ * The layout for this stage size and these stream readings, recomputed from scratch every time: nothing
+ * from the previous screen's stage (the short rest preview) or stream shape can carry over. Any stream
+ * shape, including a landscape track on a portrait phone, is cover-cropped to fill the stage.
+ */
+export function fitStage(stage: Size, sources: FrameSources): { stream: (Size & { source: FrameSizeSource }) | null; layout: StageLayout | null } {
+  const stream = pickFrameSize(sources);
+  return { stream, layout: coverLayout(stage.width, stage.height, stream?.width ?? 0, stream?.height ?? 0) };
 }
 
 export interface Rect {
