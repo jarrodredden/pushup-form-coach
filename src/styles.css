@@ -939,6 +939,23 @@ h1, h2, h3, p { margin: 0; }
 .upload-status { font-size: 0.9rem; color: var(--muted); }
 .upload-status--done { color: var(--good); font-weight: 700; }
 .upload-status--error { color: var(--low); font-weight: 700; }
+.test-run-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px max(16px, env(safe-area-inset-left)) 0;
+}
+.test-run-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.16);
+  border: 1px solid var(--mid);
+  color: var(--mid);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.test-run-badge--consent { background: rgba(255, 255, 255, 0.06); border-color: var(--line-strong); color: var(--text); }
 .upload-status--waiting { color: var(--mid); font-weight: 700; }
 .upload-status--uploading { color: var(--text); }
 

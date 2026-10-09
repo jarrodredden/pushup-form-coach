@@ -98,6 +98,14 @@ During the coached set the voice says **"Down"** the moment the volunteer locks 
 
 To regenerate the clips: `node scripts/generate-tempo-cues.mjs` (needs `ffmpeg` and internet).
 
+## Admin test runs
+
+With Admin unlocked (PIN `180180`), the Admin sheet has two **Test run** switches. Both start off and are only visible to Admin:
+- **Skip consent form:** start a full session without signing the consent form. A "Consent skipped (admin)" badge shows under the top bar.
+- **Don't save results:** that session isn't uploaded to the results sheet, automatically or manually, and nothing is queued. A "Test run – results not saved" badge shows under the top bar, and the results screen says the result isn't saved. A session started (or switched) as a test run stays unsaved even if Admin signs out on its results. Save to this device and the exports still work.
+
+Neither switch is stored. Both turn off on **Next volunteer**, on **Sign out admin**, and on reload, so a volunteer never inherits them.
+
 ## Results upload (Google Sheet)
 
 Each result is posted as one `text/plain` JSON row to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.

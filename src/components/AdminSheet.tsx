@@ -12,6 +12,10 @@ interface AdminSheetProps {
   unlocked: boolean;
   onUnlock: (pin: string) => boolean;
   onLock: () => void;
+  skipConsent: boolean;
+  onSkipConsentChange: (on: boolean) => void;
+  noSave: boolean;
+  onNoSaveChange: (on: boolean) => void;
   baselines: SavedBaselines;
   angle: BaselineAngle;
   onAngleChange: (angle: BaselineAngle) => void;
@@ -102,6 +106,25 @@ export function AdminSheet(props: AdminSheetProps) {
               Diagnostics
             </button>
           </div>
+
+          <section className="placement-note test-run-switches" aria-label="Test run">
+            <strong>Test run (admin only)</strong>
+            <p>Both start off and switch off again on Next volunteer or Sign out admin, so a volunteer never inherits them.</p>
+            <label className="switch-row">
+              <span className="switch-row__text">
+                <strong>Skip consent form</strong>
+                <span>Start a full session without signing the consent form.</span>
+              </span>
+              <input type="checkbox" role="switch" className="switch" checked={props.skipConsent} onChange={(event) => props.onSkipConsentChange(event.target.checked)} />
+            </label>
+            <label className="switch-row">
+              <span className="switch-row__text">
+                <strong>Don’t save results</strong>
+                <span>No automatic or manual upload to the results sheet, and nothing is queued. Shows a “Test run” badge.</span>
+              </span>
+              <input type="checkbox" role="switch" className="switch" checked={props.noSave} onChange={(event) => props.onNoSaveChange(event.target.checked)} />
+            </label>
+          </section>
 
           {tab === 'standards' ? <StandardsEditor {...props} /> : null}
           {tab === 'consent' ? <ConsentSettingsEditor {...props} /> : null}

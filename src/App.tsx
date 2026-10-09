@@ -328,6 +328,10 @@ export default function App() {
   const [restNow, setRestNow] = useState(() => Date.now());
   const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem(ADMIN_UNLOCK_KEY) === '1');
   const [adminOpen, setAdminOpen] = useState(false);
+  // Admin test-run switches. Never persisted, and cleared on admin sign-out and Next volunteer.
+  const [adminSkipConsent, setAdminSkipConsent] = useState(false);
+  const [adminNoSave, setAdminNoSave] = useState(false);
+  const [sessionNoSave, setSessionNoSave] = useState(false);
   const [stageDiagPinned, setStageDiagPinned] = useState(() => localStorage.getItem(STAGE_DIAG_KEY) === '1');
   const [stageDiagTripped, setStageDiagTripped] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -530,6 +534,10 @@ export default function App() {
     hasResults: sessionReps.length > 0,
   });
   phaseRef.current = phase;
+  const skipConsent = adminUnlocked && adminSkipConsent;
+  const testRunNoSave = adminUnlocked && adminNoSave;
+  /** A session started (or switched) as a test run stays unsaved even if admin signs out on its results. */
+  const resultsNotSaved = testRunNoSave || sessionNoSave;
   const steps = journeySteps(workflowMode);
   const stepKey = activeStepKey(phase, workflowMode, coachingTrialState, Boolean(athleteName.trim()));
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
@@ -766,6 +774,7 @@ export default function App() {
     setShowGoOverlay(false);
     setActiveBanner(null);
     resultSessionIdRef.current = newSessionId();
+    setSessionNoSave(false);
     setUploadState('idle');
     setUploadMessage('');
     setSavedLocally(false);
@@ -1657,7 +1666,7 @@ export default function App() {
   };
 
   const startSession = () => {
-    if (!isConsentValidFor(currentConsent, athleteName)) {
+    if (!skipConsent && !isConsentValidFor(currentConsent, athleteName)) {
       setConsentOpen(Boolean(athleteName.trim()));
       return;
     }
@@ -1670,6 +1679,9 @@ export default function App() {
       setTrialState('idle');
       setPaused(false);
     }
+    setSessionNoSave(testRunNoSave);
+    if (skipConsent && !isConsentValidFor(currentConsent, athleteName)) pushLog('system', 'Admin test run: consent form skipped.');
+    if (testRunNoSave) pushLog('system', 'Admin test run: results will not be saved to the sheet.');
     void startCamera();
   };
 
@@ -1715,6 +1727,8 @@ export default function App() {
   };
 
   const nextVolunteer = () => {
+    setAdminSkipConsent(false);
+    setAdminNoSave(false);
     resetForRetry();
     setAthleteName('');
     updateCurrentConsent(null);
@@ -1861,7 +1875,7 @@ export default function App() {
   };
 
   const queueCurrentResult = () => {
-    if (!athleteName.trim() || !sessionReps.length) return;
+    if (resultsNotSaved || !athleteName.trim() || !sessionReps.length) return;
     const sessionId = resultSessionIdRef.current;
     autoQueuedSessionRef.current = sessionId;
     setPendingResultCount(savePendingResults(enqueueResult(loadPendingResults(), sessionId, buildUploadRow(), Date.now())).length);
@@ -1871,6 +1885,7 @@ export default function App() {
 
   /** Manual upload/retry. Same session_id as the automatic upload, so it can't add a second row. */
   const uploadResult = () => {
+    if (resultsNotSaved) return;
     if (!athleteName.trim()) {
       setToast({ tone: 'error', text: 'Add a name before uploading.' });
       return;
@@ -1884,10 +1899,19 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (testRunNoSave && phase !== 'setup') setSessionNoSave(true);
+  }, [testRunNoSave, phase]);
+
   // Set 2 done: save the row right away, without waiting for a tap.
   useEffect(() => {
     if (workflowMode !== 'coaching' || coachingTrialState !== 'complete' || !coachingComplete) return;
     if (autoQueuedSessionRef.current === resultSessionIdRef.current) return;
+    if (resultsNotSaved) {
+      autoQueuedSessionRef.current = resultSessionIdRef.current;
+      pushLog('system', 'Admin test run: result not uploaded.');
+      return;
+    }
     queueCurrentResult();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowMode, coachingTrialState, coachingComplete]);
@@ -2068,6 +2092,8 @@ export default function App() {
   };
 
   const lockAdmin = () => {
+    setAdminSkipConsent(false);
+    setAdminNoSave(false);
     setAdminUnlocked(false);
     localStorage.removeItem(ADMIN_UNLOCK_KEY);
     setAdminOpen(false);
@@ -2237,12 +2263,12 @@ export default function App() {
       case 'setup':
         return (
           <>
-            {!poseReady || needsName || !consentSigned ? (
+            {!poseReady || needsName || !(consentSigned || skipConsent) ? (
               <p className="dock__hint">
                 {!poseReady ? 'Loading the pose coach…' : needsName ? 'Add your name above to start.' : 'Sign the consent form above to start.'}
               </p>
             ) : null}
-            <button className="btn btn--primary btn--xl btn--block" onClick={startSession} disabled={!poseReady || !secureContext || needsName || !consentSigned}>
+            <button className="btn btn--primary btn--xl btn--block" onClick={startSession} disabled={!poseReady || !secureContext || needsName || !(consentSigned || skipConsent)}>
               <CameraIcon /> Start camera and sound
             </button>
           </>
@@ -2343,6 +2369,13 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {resultsNotSaved || skipConsent ? (
+        <div className="test-run-bar" role="status">
+          {resultsNotSaved ? <span className="test-run-badge">Test run – results not saved</span> : null}
+          {skipConsent ? <span className="test-run-badge test-run-badge--consent">Consent skipped (admin)</span> : null}
+        </div>
+      ) : null}
 
       <Stepper steps={steps} activeKey={stepKey} />
 
@@ -2507,13 +2540,15 @@ export default function App() {
               focusLines={focusLines}
               previousScore={previousScore}
               uploadState={uploadState}
-              uploadMessage={uploadMessage || 'Upload adds one row to the shared science-fair results sheet.'}
+              uploadMessage={
+                resultsNotSaved ? 'Test run — this result is not saved to the results sheet.' : uploadMessage || 'Upload adds one row to the shared science-fair results sheet.'
+              }
               savedLocally={savedLocally}
               onSaveLocal={saveCurrentSession}
               onExportNotes={exportNotes}
               onExportCsv={exportCsv}
               adminUnlocked={adminUnlocked}
-              onUpload={uploadState === 'error' || uploadState === 'idle' ? uploadResult : undefined}
+              onUpload={!resultsNotSaved && (uploadState === 'error' || uploadState === 'idle') ? uploadResult : undefined}
             />
           ) : null}
 
@@ -2527,6 +2562,10 @@ export default function App() {
         unlocked={adminUnlocked}
         onUnlock={unlockAdmin}
         onLock={lockAdmin}
+        skipConsent={adminSkipConsent}
+        onSkipConsentChange={setAdminSkipConsent}
+        noSave={adminNoSave}
+        onNoSaveChange={setAdminNoSave}
         baselines={baselines}
         angle={baselineAngle}
         onAngleChange={setBaselineAngle}
