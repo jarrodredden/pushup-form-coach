@@ -82,7 +82,6 @@ export function BreakPanel({
   onAdminSkipRest,
   set1,
   focusLines,
-  metrics,
   visualsAllowed,
   spokenCoaching,
   onSpokenCoachingChange,
@@ -96,7 +95,6 @@ export function BreakPanel({
   onAdminSkipRest: () => void;
   set1: SetSummary;
   focusLines: string[];
-  metrics: Array<{ label: string; value: number | null }>;
   visualsAllowed: boolean;
   spokenCoaching: boolean;
   onSpokenCoachingChange: (value: boolean) => void;
@@ -155,17 +153,6 @@ export function BreakPanel({
           </ol>
         </div>
       </section>
-      {visualsAllowed ? (
-        <section className="card live-card">
-          <h2 className="card__title">Practice it now</h2>
-          <p className="fine-print">Hold a push-up and adjust until the bars turn green. Nothing is counted during the break.</p>
-          <div className="metric-list">
-            {metrics.map((metric) => (
-              <MetricBar key={metric.label} label={metric.label} value={metric.value} />
-            ))}
-          </div>
-        </section>
-      ) : null}
       {showSpokenSwitch ? (
         <section className="card card--admin">
           <SpokenTipsSwitch checked={spokenCoaching} onChange={onSpokenCoachingChange} disabled={!audioAllowed} />

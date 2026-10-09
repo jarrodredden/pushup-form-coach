@@ -2586,7 +2586,6 @@ export default function App() {
               onAdminSkipRest={skipRestAsAdmin}
               set1={set1Summary}
               focusLines={coachingFocusLines(set1Summary, cameraView)}
-              metrics={liveMetrics}
               visualsAllowed={modeAllowsVisuals}
               spokenCoaching={spokenCoachingEnabled}
               onSpokenCoachingChange={setSpokenTipsSwitch}
