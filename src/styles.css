@@ -281,26 +281,6 @@ h1, h2, h3, p { margin: 0; }
 .set-dot { width: 22px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.25); transition: background 200ms ease; }
 .set-dot.is-done { background: var(--volt); }
 
-.form-legend {
-  position: absolute;
-  z-index: 5;
-  top: 118px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(10, 12, 15, 0.62);
-  font-size: 0.74rem;
-  font-weight: 700;
-  color: #d6f1ff;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.form-legend__swatch { width: 14px; height: 4px; border-radius: 999px; background: #5bc8ff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4); }
-
 .stage__alert {
   position: absolute;
   z-index: 6;

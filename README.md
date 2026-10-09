@@ -71,20 +71,6 @@ How grading uses it: every metric is a 0–100 form score. A rep scoring at or a
 
 **In-set feedback is corrective only.** After each rep the coach names the single weakest part of that rep (for example "Tuck your elbows", "Lower your chest", "Keep your hips up", "Squeeze your core", "Full lockout at the top"), rotating phrasing so the same line never plays twice in a row. A clean rep gets silence, or rarely a neutral "Keep that form" (at most once per set). Praise is saved for the end: "Set one done. Nice work!" before the rest, and a session wrap-up with the set 1 → set 2 change ("Great work! You improved by 8 points from set 1 to set 2."). Spoken lines still queue, so they never overlap or cut off. Lines are in `src/lib/feedbackLines.json`; `node scripts/generate-voices.mjs` makes any missing MP3s.
 
-### Blue skeleton = good form (set 2)
-
-In set 2 with visuals (Combined or Visual), each part of the live skeleton turns **light blue** while its form component is good, and stays the usual lime green while it isn't (a small "Blue = good form" legend sits under the rep dots). Set 1, the break, Control and Audio keep the plain overlay so the baseline set stays clean. In free practice only an unlocked Admin sees the colours, for previewing.
-
-| Skeleton part | Form component |
-| --- | --- |
-| Upper arms, forearms, elbow dots | Elbow tuck |
-| Torso (shoulder–hip lines), hips, knees, ankles | Plank line / hips |
-| Shoulder line, shoulder dots, wrists and hands | Hands under shoulders |
-| Head points | Head position (Head-on only) |
-| Pulsing blue rings on the elbows | Target depth reached (held 0.7 s) |
-
-"Good" means the live score is at or above the same line the coach uses for corrections (depth 80, plank 75, elbow tuck 75, hands 70, head 65), computed from the same per-frame measurements as the score, including the 7-frame elbow median. To stop flicker, a blue part only drops back once its score falls 5 points under the line, and any change needs 3 frames in a row. A part the camera can't judge (plank n/a, elbow angle unreadable, head not visible, head in Side view) stays lime. The logic is in `src/lib/formColors.ts`; drawing goes through the same cover transform as the video (`src/lib/stageLayout.ts`) and uses two paths per colour per frame, so it stays cheap on phones.
-
 ### Real-time "Up" / "Down" tempo cues (set 2)
 
 During the coached set the voice says **"Down"** the moment the volunteer locks out at the top (the start of each rep, including the first one after **Go!**) and **"Up"** the moment the elbows reach the target depth (depth score 80, about 100° of elbow bend, the same depth that avoids the "Lower your chest" correction). That tells them when they've gone deep enough. The cues come from the live pose, not a metronome, so they follow the volunteer's own pace.
