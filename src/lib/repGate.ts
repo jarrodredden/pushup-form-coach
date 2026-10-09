@@ -95,6 +95,8 @@ export interface RepMachine {
   repFrames: number;
   plankFrames: number;
   lastRepAt: number;
+  /** Straightest elbow angle at the top before this rep's descent (how fully they locked out). */
+  topPeak: number;
 }
 
 export function createRepMachine(): RepMachine {
@@ -111,6 +113,7 @@ export function createRepMachine(): RepMachine {
     repFrames: 0,
     plankFrames: 0,
     lastRepAt: 0,
+    topPeak: 0,
   };
 }
 
@@ -136,9 +139,11 @@ export function stepRep(previous: RepMachine, input: RepInput): { state: RepMach
     if (horizontal && atTopAngle) {
       state.armFrames += 1;
       state.armSince ??= now;
+      state.topPeak = Math.max(state.topPeak, elbowAngle);
     } else {
       state.armFrames = 0;
       state.armSince = null;
+      state.topPeak = 0;
     }
     if (state.armFrames >= ARM_FRAMES && state.armSince !== null && now - state.armSince >= ARM_MS) {
       return { state: { ...state, armed: true, sawTop: true, sawBottom: false, topStableFrames: STABLE_FRAMES, bottomStableFrames: 0, offPlankFrames: 0, leftTopAt: null, repFrames: 0, plankFrames: 0 }, event: 'armed', accumulate: false };
@@ -147,6 +152,7 @@ export function stepRep(previous: RepMachine, input: RepInput): { state: RepMach
   }
 
   state.offPlankFrames = horizontal ? 0 : state.offPlankFrames + 1;
+  if (!state.sawTop || state.leftTopAt === null) state.topPeak = Math.max(state.topPeak, elbowAngle);
   if (!state.sawBottom && state.offPlankFrames >= DISARM_FRAMES) {
     return { state: { ...createRepMachine(), lastRepAt: state.lastRepAt }, event: 'disarmed', accumulate: false };
   }
@@ -178,7 +184,7 @@ export function stepRep(previous: RepMachine, input: RepInput): { state: RepMach
   if (state.sawBottom && state.topStableFrames >= STABLE_FRAMES && now - state.lastRepAt > MIN_GAP_MS) {
     const duration = state.leftTopAt === null ? 0 : now - state.leftTopAt;
     const plankShare = state.repFrames ? state.plankFrames / state.repFrames : 0;
-    const next = { ...state, sawTop: false, sawBottom: false, topStableFrames: 0, bottomStableFrames: 0, leftTopAt: null, repFrames: 0, plankFrames: 0 };
+    const next = { ...state, sawTop: false, sawBottom: false, topStableFrames: 0, bottomStableFrames: 0, leftTopAt: null, repFrames: 0, plankFrames: 0, topPeak: elbowAngle };
     if (duration < MIN_REP_MS) return { state: next, event: 'rejected-fast', accumulate: true };
     if (plankShare < MIN_PLANK_SHARE) return { state: next, event: 'rejected-posture', accumulate: true };
     return { state: { ...next, lastRepAt: now }, event: 'rep', accumulate: true };

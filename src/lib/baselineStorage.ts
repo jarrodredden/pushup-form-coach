@@ -1,4 +1,5 @@
 import { DEFAULT_ELBOW_IDEAL_RANGE, normalizeElbowRange, type ElbowIdealRange } from './elbowTuck';
+import { angleForDepthScore } from './scoring';
 import type { BaselineAngle, BaselinePoseReference, CameraViewMode, PoseAnalysis, SavedBaselines } from './types';
 
 const BASELINE_STORAGE_KEY = 'pushup-coach-baselines';
@@ -126,7 +127,7 @@ export function gradingAngleForView(view: CameraViewMode): BaselineAngle {
 }
 
 export function elbowDegreesForDepthScore(score: number) {
-  return Math.round(160 - (Math.max(0, Math.min(100, score)) * 75) / 100);
+  return Math.round(angleForDepthScore(score));
 }
 
 export function createDefaultBaselineReference(angle: BaselineAngle): BaselinePoseReference {

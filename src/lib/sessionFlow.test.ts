@@ -62,7 +62,8 @@ describe('coaching session flow', () => {
       { score: 60, elbowDepthScore: 40, bodyLineScore: 70, elbowFlareScore: 90, hipBias: -30 },
       { score: 70, elbowDepthScore: 50, bodyLineScore: 72, elbowFlareScore: 90, hipBias: -28 },
     ]);
-    expect(summary).toMatchObject({ count: 2, average: 65, best: 70, depth: 45, hipDirection: 'pike' });
+    // Reps 10 points apart: the set score gives up 2 points for consistency.
+    expect(summary).toMatchObject({ count: 2, mean: 65, consistencyPenalty: 2, average: 63, best: 70, depth: 45, hipDirection: 'pike' });
     const lines = coachingFocusLines(summary);
     expect(lines[0]).toBe(FOCUS_LINES.depth);
     expect(lines[0]).toMatch(/a little deeper while keeping hips level/i);

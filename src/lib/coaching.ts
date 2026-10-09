@@ -10,8 +10,8 @@ export interface CoachingIssue {
 }
 
 export const SCORE_WEIGHTS: Record<CameraViewMode, Record<CoachingMetricKey, number>> = {
-  side: { depth: 0.56, hips: 0.28, handStack: 0.1, elbowFlare: 0.06, headAlignment: 0 },
-  'head-on': { depth: 0.55, hips: 0.24, elbowFlare: 0.09, handStack: 0.07, headAlignment: 0.05 },
+  side: { depth: 0.47, hips: 0.27, handStack: 0.12, elbowFlare: 0.06, headAlignment: 0.08 },
+  'head-on': { depth: 0.45, hips: 0.22, elbowFlare: 0.08, handStack: 0.13, headAlignment: 0.12 },
 };
 
 /** Weighted form score. A plank line the camera couldn't see (null) is left out and the rest re-weighted. */

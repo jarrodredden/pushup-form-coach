@@ -36,7 +36,8 @@ describe('100-standard scoring', () => {
     const draft = createDefaultBaselineReference('front');
     expect(draft.targets.elbowDepthScore).toBe(100);
     expect(draft.targets.hipPikeScore).toBeNull();
-    expect(elbowDegreesForDepthScore(100)).toBe(85);
+    expect(elbowDegreesForDepthScore(100)).toBe(90);
+    expect(elbowDegreesForDepthScore(70)).toBe(100);
     expect(draft.elbowIdealRange).toEqual(DEFAULT_ELBOW_IDEAL_RANGE);
   });
 

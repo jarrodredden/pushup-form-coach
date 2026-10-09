@@ -81,6 +81,12 @@ export interface SessionRep {
   hipBias?: number;
   bottomElbowAngle?: number;
   elbowAbduction?: number;
+  /** Leaving the top to locking out again (ms). */
+  durationMs?: number;
+  /** Straightest elbow angle at the top the rep started from. */
+  lockoutAngle?: number;
+  /** Points taken off the form score for a rushed rep or a short lockout. */
+  controlPenalty?: number;
   /** Feedback the volunteer received while doing this rep. */
   feedbackMode?: FeedbackMode;
   /** Real-time Up/Down tempo cues were playing during this rep. */

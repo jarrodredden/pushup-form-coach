@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FOCUS_LINES, hipDirection, LIVE_CUES, liveCoachingIssues, rankCoachingTips, shortenCue, SPOKEN_CUES } from './coaching';
+import { FOCUS_LINES, hipDirection, LIVE_CUES, liveCoachingIssues, rankCoachingTips, SCORE_WEIGHTS, shortenCue, SPOKEN_CUES } from './coaching';
 import type { PoseAnalysis } from './types';
 import { resolveVoiceClipNames } from './voiceAudio';
 
@@ -78,9 +78,15 @@ describe('tip ranking by expected net score gain', () => {
       { key: 'handStack' as const, score: 40, passLine: 72 },
       { key: 'headAlignment' as const, score: 20, passLine: 70 },
     ];
-    expect(rankCoachingTips(metrics, 'head-on')[0].key).toBe('handStack');
-    const side = rankCoachingTips(metrics, 'side');
-    expect(side.find((tip) => tip.key === 'headAlignment')?.net).toBe(0);
+    for (const view of ['head-on', 'side'] as const) {
+      for (const tip of rankCoachingTips(metrics, view)) {
+        const metric = metrics.find((item) => item.key === tip.key)!;
+        expect(tip.net).toBeCloseTo(SCORE_WEIGHTS[view][tip.key] * (100 - metric.score) * 0.5);
+      }
+    }
+    // Hands and head count about the same from the front, so the bigger gap leads.
+    expect(rankCoachingTips(metrics, 'head-on')[0].key).toBe('headAlignment');
+    expect(rankCoachingTips([metrics[0], { ...metrics[1], score: 60 }], 'head-on')[0].key).toBe('handStack');
   });
 });
 

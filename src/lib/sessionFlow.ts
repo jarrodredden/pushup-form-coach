@@ -134,7 +134,12 @@ export type SetHipDirection = 'pike' | 'sag' | 'mixed' | null;
 
 export interface SetSummary {
   count: number;
+  /** The set score: mean rep score, less a consistency deduction when reps vary a lot. */
   average: number;
+  /** Plain mean of the rep scores. */
+  mean: number;
+  /** Points taken off the mean for uneven reps. */
+  consistencyPenalty: number;
   best: number;
   depth: number;
   /** Null when no rep in the set had a readable plank line. */
@@ -161,13 +166,29 @@ function summarizeHipDirection(reps: RepLike[]): SetHipDirection {
   return 'mixed';
 }
 
+/** Rep scores may spread this much (standard deviation) before consistency costs anything. */
+const CONSISTENCY_FREE_SD = 2;
+const CONSISTENCY_POINTS_PER_SD = 0.6;
+const CONSISTENCY_MAX_PENALTY = 8;
+
+export function consistencyPenalty(scores: number[]) {
+  if (scores.length < 2) return 0;
+  const mean = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  const sd = Math.sqrt(scores.reduce((sum, value) => sum + (value - mean) ** 2, 0) / scores.length);
+  return Math.round(Math.min(CONSISTENCY_MAX_PENALTY, Math.max(0, sd - CONSISTENCY_FREE_SD) * CONSISTENCY_POINTS_PER_SD));
+}
+
 export function summarizeReps(reps: RepLike[]): SetSummary {
-  if (!reps.length) return { count: 0, average: 0, best: 0, depth: 0, bodyLine: null, elbowFlare: 0, hipDirection: null };
+  if (!reps.length) return { count: 0, average: 0, mean: 0, consistencyPenalty: 0, best: 0, depth: 0, bodyLine: null, elbowFlare: 0, hipDirection: null };
   const avg = (pick: (rep: RepLike) => number) => Math.round(reps.reduce((sum, rep) => sum + pick(rep), 0) / reps.length);
   const plankScores = reps.map((rep) => rep.bodyLineScore).filter((value): value is number => value !== null && value !== undefined);
+  const mean = avg((rep) => rep.score);
+  const penalty = consistencyPenalty(reps.map((rep) => rep.score));
   return {
     count: reps.length,
-    average: avg((rep) => rep.score),
+    average: Math.max(0, mean - penalty),
+    mean,
+    consistencyPenalty: penalty,
     best: reps.reduce((best, rep) => Math.max(best, rep.score), 0),
     depth: avg((rep) => rep.elbowDepthScore),
     bodyLine: plankScores.length ? Math.round(plankScores.reduce((sum, value) => sum + value, 0) / plankScores.length) : null,

@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { LIVE_CUES } from './coaching';
-import { addRepFrame, analyzePose, BOTTOM_WINDOW_DEGREES, createEmptyRepAccumulator, finalizeRep, REP_BOTTOM_ANGLE } from './scoring';
+import {
+  addRepFrame,
+  analyzePose,
+  BOTTOM_WINDOW_DEGREES,
+  controlPenalty,
+  createEmptyRepAccumulator,
+  depthScoreForAngle,
+  finalizeRep,
+  LOCKOUT_NOTE,
+  REP_BOTTOM_ANGLE,
+  RUSHED_NOTE,
+} from './scoring';
+import { SIDE_CAMERA } from './idealPushup';
 import { updatePlankReference } from './plankLine';
 import { modelLandmarks } from './poseFixtures';
 import { PoseAnalysis, PosePoint } from './types';
@@ -86,7 +98,7 @@ describe('push-up scoring', () => {
 });
 
 function frameAt(elbowAngle: number, overrides: Partial<PoseAnalysis> = {}): PoseAnalysis {
-  const depth = Math.round(Math.max(0, Math.min(100, ((160 - elbowAngle) / 75) * 100)));
+  const depth = Math.round(depthScoreForAngle(elbowAngle));
   return {
     viewMode: 'head-on',
     overallScore: 0,
@@ -159,5 +171,65 @@ describe('bottom-of-rep scoring', () => {
   it('keeps the signed hip bias at the bottom so the coach knows pike vs sag', () => {
     const rep = scoreRep([100, 95, 92, 95], () => ({ bodyLineScore: 60, hipBias: -40 }));
     expect(rep?.hipBias).toBe(-40);
+  });
+
+  it('reads depth from the deepest frames, not the average of the bottom window', () => {
+    const rep = scoreRep([101, 96, 90, 89, 90, 96, 101]);
+    expect(rep?.bottomElbowAngle).toBe(89);
+    expect(rep?.elbowDepthScore).toBe(100);
+  });
+});
+
+describe('stricter scoring', () => {
+  it('gives full depth credit only at about 90° or deeper, falling 3 points a degree', () => {
+    expect(depthScoreForAngle(80)).toBe(100);
+    expect(depthScoreForAngle(90)).toBe(100);
+    expect(depthScoreForAngle(95)).toBe(85);
+    expect(depthScoreForAngle(100)).toBe(70);
+    expect(depthScoreForAngle(110)).toBe(40);
+    expect(depthScoreForAngle(124)).toBe(0);
+  });
+
+  it('takes points off rushed reps and short lockouts, none off controlled ones', () => {
+    expect(controlPenalty({ durationMs: 2000, lockoutAngle: 175 })).toEqual({ rushed: 0, lockout: 0 });
+    expect(controlPenalty({ durationMs: 1200, lockoutAngle: 165 })).toEqual({ rushed: 0, lockout: 0 });
+    expect(controlPenalty({ durationMs: 900, lockoutAngle: 175 }).rushed).toBe(8);
+    expect(controlPenalty({ durationMs: 600, lockoutAngle: 175 }).rushed).toBe(15);
+    expect(controlPenalty({ durationMs: 2000, lockoutAngle: 161.5 }).lockout).toBe(5);
+    expect(controlPenalty({ durationMs: 2000, lockoutAngle: 158 }).lockout).toBe(10);
+  });
+
+  it('applies the control penalty to the rep score and says why', () => {
+    const bottom = [88, 86, 85, 86, 88];
+    let accumulator = createEmptyRepAccumulator();
+    for (const angle of bottom) accumulator = addRepFrame(accumulator, frameAt(angle));
+    const controlled = finalizeRep(accumulator, frameAt(160), 1, { durationMs: 1800, lockoutAngle: 172 })!;
+    const rushed = finalizeRep(accumulator, frameAt(160), 1, { durationMs: 800, lockoutAngle: 160 })!;
+    expect(controlled.controlPenalty).toBe(0);
+    expect(rushed.controlPenalty).toBe(10 + 7);
+    expect(rushed.score).toBe(controlled.score - 17);
+    expect(rushed.notes).toEqual(expect.arrayContaining([RUSHED_NOTE, LOCKOUT_NOTE]));
+    expect(controlled.notes).not.toContain(RUSHED_NOTE);
+  });
+
+  it('keeps a tucked side-view rep at full hand and head credit (shoulders ahead of the wrists at the bottom is normal)', () => {
+    for (const depth of [0, 0.5, 1]) {
+      const side = analyzePose(modelLandmarks({ depth, tuckDegrees: 25, camera: SIDE_CAMERA, aspect: 16 / 9 }), 'side', { aspect: 16 / 9 });
+      expect(side.handStackScore).toBe(100);
+      expect(side.headAlignmentScore).toBe(100);
+      expect(side.elbowFlareScore).toBe(100);
+    }
+  });
+
+  it('marks a dropped head from the side', () => {
+    const headScore = (drop: number) => {
+      const points = modelLandmarks({ depth: 0.8, camera: SIDE_CAMERA, aspect: 16 / 9 });
+      const torso = Math.hypot((points[11].x - points[23].x) * (16 / 9), points[11].y - points[23].y);
+      for (let i = 0; i <= 10; i += 1) points[i] = { ...points[i], y: points[i].y + drop * torso };
+      return analyzePose(points, 'side', { aspect: 16 / 9 }).headAlignmentScore;
+    };
+    expect(headScore(0.1)).toBe(100);
+    expect(headScore(0.25)).toBeLessThan(80);
+    expect(headScore(0.4)).toBeLessThan(40);
   });
 });

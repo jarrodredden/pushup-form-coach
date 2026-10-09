@@ -4,7 +4,7 @@ import type { PosePoint } from './types';
  * Plank line (hip alignment), measured the way each camera view can actually see it.
  *
  * Side view: the shoulder–hip–ankle angle (knees if the ankles are out of frame). 180° is a
- * straight body; up to 12° of bend still counts as straight.
+ * straight body; up to 7° of bend still counts as straight, 30° scores 0.
  *
  * Front view: the body runs toward the camera, so that angle is unreadable. Instead the hips'
  * on-screen drop below the shoulders is compared with the drop a straight plank would show at the
@@ -47,11 +47,11 @@ const ANCHOR_INDICES: Record<PlankAnchor, [number, number]> = { hips: [23, 24], 
 const FRONT_MODEL: Record<PlankAnchor, { slope: number; sensitivity: number; deadZone: number }> = {
   // Straight-plank gap shrinks by `slope` per unit of shoulder lowering; 12 cm of sag moves the
   // hips ~0.23 and the knees ~0.085 shoulder widths, so knee readings are scaled up to match.
-  hips: { slope: 0.73, sensitivity: 1, deadZone: 0.05 },
-  knees: { slope: 1.14, sensitivity: 2.7, deadZone: 0.08 },
+  hips: { slope: 0.73, sensitivity: 1, deadZone: 0.03 },
+  knees: { slope: 1.14, sensitivity: 2.7, deadZone: 0.05 },
 };
-/** Beyond the dead zone, this much hip-equivalent deviation (≈12 cm) costs about 45 points. */
-const FRONT_SCALE = 0.4;
+/** Beyond the dead zone, 0.1 hip-equivalent shoulder widths of deviation (≈5 cm) costs about 33 points. */
+const FRONT_SCALE = 0.3;
 
 /**
  * Used for the hips until the athlete's own top plank is captured. Phone height (floor to 0.6 m)
@@ -62,8 +62,8 @@ const FRONT_SCALE = 0.4;
 export const DEFAULT_HIP_REFERENCE: PlankReferencePoint = { topGap: 0.5, topReach: 1.45 };
 const UNCALIBRATED_HIP_SLACK = 0.25;
 
-const SIDE_STRAIGHT_DEGREES = 12;
-const SIDE_ZERO_AT_DEGREES = 40;
+const SIDE_STRAIGHT_DEGREES = 7;
+const SIDE_ZERO_AT_DEGREES = 30;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const visibility = (landmarks: PosePoint[], indices: number[]) =>

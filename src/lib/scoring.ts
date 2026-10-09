@@ -6,6 +6,7 @@ import { CameraViewMode, PoseAnalysis, PosePoint, RepAccumulator, RepFrameSample
 export const MIN_SIGNAL = 0.45;
 export const REP_TOP_ANGLE = 158;
 export const REP_BOTTOM_ANGLE = 120;
+
 /** Frames within this many degrees of the rep's deepest elbow angle form the scored bottom window. */
 export const BOTTOM_WINDOW_DEGREES = 12;
 const MAX_BOTTOM_FRAMES = 240;
@@ -39,6 +40,49 @@ const averageVisibility = (landmarks: PosePoint[] | undefined, indices: readonly
 };
 const mean = (...values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
 const scoreLine = (offset: number, scale: number) => clamp(100 - offset * scale, 0, 100);
+
+/** Elbow angle (as measured) that earns full depth credit; every degree above costs DEPTH_POINTS_PER_DEGREE. */
+export const FULL_DEPTH_ANGLE = 90;
+const DEPTH_POINTS_PER_DEGREE = 3;
+export const depthScoreForAngle = (elbowAngle: number) => clamp(100 - Math.max(0, elbowAngle - FULL_DEPTH_ANGLE) * DEPTH_POINTS_PER_DEGREE, 0, 100);
+export const angleForDepthScore = (score: number) => FULL_DEPTH_ANGLE + (100 - clamp(score, 0, 100)) / DEPTH_POINTS_PER_DEGREE;
+/** The rep's depth is read from its few deepest frames, not diluted by the frames around them. */
+const DEPTH_SAMPLE_FRAMES = 3;
+
+/** Down and back up faster than this is rushed. */
+export const CONTROLLED_REP_MS = 1200;
+const RUSHED_MAX_PENALTY = 15;
+/** Over RUSHED_MAX_PENALTY's span: at CONTROLLED_REP_MS − this, the full penalty applies. */
+const RUSHED_SPAN_MS = 600;
+/** Arms this straight at the top count as locked out; REP_TOP_ANGLE (the counting minimum) costs LOCKOUT_MAX_PENALTY. */
+export const FULL_LOCKOUT_ANGLE = 165;
+const LOCKOUT_MAX_PENALTY = 10;
+
+export const RUSHED_NOTE = 'Rushed — take about two seconds, down and up.';
+export const LOCKOUT_NOTE = 'Straighten the arms fully at the top.';
+
+export interface RepControl {
+  durationMs: number;
+  lockoutAngle: number;
+}
+
+export function controlPenalty(control: RepControl | undefined) {
+  if (!control) return { rushed: 0, lockout: 0 };
+  const rushed = clamp(((CONTROLLED_REP_MS - control.durationMs) / RUSHED_SPAN_MS) * RUSHED_MAX_PENALTY, 0, RUSHED_MAX_PENALTY);
+  const lockout = control.lockoutAngle > 0
+    ? clamp(((FULL_LOCKOUT_ANGLE - control.lockoutAngle) / (FULL_LOCKOUT_ANGLE - REP_TOP_ANGLE)) * LOCKOUT_MAX_PENALTY, 0, LOCKOUT_MAX_PENALTY)
+    : 0;
+  return { rushed: Math.round(rushed), lockout: Math.round(lockout) };
+}
+
+/** Side view: wrists may sit this far (in torso lengths) from under the shoulders for full credit; zero at SIDE_HAND_ZERO. */
+const SIDE_HAND_FULL = 0.2;
+const SIDE_HAND_ZERO = 0.5;
+/** Side view: head in line with the torso within this many degrees for full credit; zero at SIDE_HEAD_ZERO_DEG. */
+const SIDE_HEAD_FULL_DEG = 12;
+const SIDE_HEAD_ZERO_DEG = 40;
+/** Front view: lateral offset of hands / head from the shoulders' centre, points lost per shoulder width. */
+const FRONT_OFFSET_POINTS = 220;
 
 const ELBOW_NOTE: Record<CameraViewMode, { below: number; text: string }> = {
   'head-on': { below: 68, text: 'Tuck the elbows in a bit more from the front view.' },
@@ -87,6 +131,7 @@ function buildSideNotes(metrics: {
   hipSagScore: number | null;
   hipPikeScore: number | null;
   handStackScore: number;
+  headAlignmentScore: number;
   elbowFlareScore: number;
   setupHint: string | null;
 }) {
@@ -96,6 +141,7 @@ function buildSideNotes(metrics: {
   if ((metrics.hipSagScore ?? 100) < 74) notes.push(LIVE_CUES.hipSag);
   if ((metrics.hipPikeScore ?? 100) < 74) notes.push(LIVE_CUES.hipPike);
   if (metrics.handStackScore < 74) notes.push('Keep hands stacked under the shoulders.');
+  if (metrics.headAlignmentScore < 72) notes.push('Keep the head in line with the body.');
   if (metrics.elbowFlareScore < ELBOW_NOTE.side.below) notes.push(ELBOW_NOTE.side.text);
   if (!notes.length) notes.push(CLEAN_NOTE.side);
   return notes;
@@ -205,14 +251,31 @@ export function analyzePose(
   const leftElbowAngle = angle(lShoulder, lElbow, lWrist);
   const rightElbowAngle = angle(rShoulder, rElbow, rWrist);
   const elbowAngle = mean(leftElbowAngle, rightElbowAngle);
-  const elbowDepthScore = clamp(((160 - elbowAngle) / 75) * 100, 0, 100);
+  const elbowDepthScore = depthScoreForAngle(elbowAngle);
   const elbowAbduction = elbowAbductionForView(landmarks, worldLandmarks, viewMode, shoulderWidth);
   const elbowFlareScore = elbowTuckScore(elbowAbduction);
-  const handStackOffset = Math.abs(wristMid.x - shoulderMid.x) / shoulderWidth;
-  const handStackScore = scoreLine(handStackOffset, 220);
-  const headAlignmentScore = nose && (nose.visibility ?? 0) > 0.35
-    ? scoreLine(Math.abs(nose.x - shoulderMid.x) / shoulderWidth, 220)
-    : 55;
+  const noseVisible = Boolean(nose) && (nose!.visibility ?? 0) > 0.35;
+  let handStackScore: number;
+  let headAlignmentScore: number;
+  if (viewMode === 'side') {
+    // Side on, the shoulders overlap, so shoulder width can't scale anything: use the torso.
+    const X = (p: PosePoint) => p.x * aspect;
+    const hipMid = midpoint(point(landmarks, LEFT.hip)!, point(landmarks, RIGHT.hip)!);
+    const torso = Math.max(Math.hypot(X(shoulderMid) - X(hipMid), shoulderMid.y - hipMid.y), 0.001);
+    const handOffset = Math.abs(X(wristMid) - X(shoulderMid)) / torso;
+    handStackScore = clamp(100 - (Math.max(0, handOffset - SIDE_HAND_FULL) / (SIDE_HAND_ZERO - SIDE_HAND_FULL)) * 100, 0, 100);
+    if (noseVisible) {
+      const torsoDir = Math.atan2(shoulderMid.y - hipMid.y, X(shoulderMid) - X(hipMid));
+      const headDir = Math.atan2(nose!.y - shoulderMid.y, X(nose!) - X(shoulderMid));
+      const neck = Math.abs(((((headDir - torsoDir) * 180) / Math.PI + 540) % 360) - 180);
+      headAlignmentScore = clamp(100 - (Math.max(0, neck - SIDE_HEAD_FULL_DEG) / (SIDE_HEAD_ZERO_DEG - SIDE_HEAD_FULL_DEG)) * 100, 0, 100);
+    } else {
+      headAlignmentScore = 55;
+    }
+  } else {
+    handStackScore = scoreLine(Math.abs(wristMid.x - shoulderMid.x) / shoulderWidth, FRONT_OFFSET_POINTS);
+    headAlignmentScore = noseVisible ? scoreLine(Math.abs(nose!.x - shoulderMid.x) / shoulderWidth, FRONT_OFFSET_POINTS) : 55;
+  }
   const framingHintText = framingHint(landmarks, viewMode);
   const phase = elbowAngle >= 155 ? 'top' : elbowAngle <= 95 ? 'bottom' : 'mid';
   const plank = viewMode === 'head-on' ? measureFrontPlank(landmarks, aspect, plankReference) : measureSidePlank(landmarks, aspect);
@@ -250,6 +313,7 @@ export function analyzePose(
       hipSagScore,
       hipPikeScore,
       handStackScore: Math.round(handStackScore),
+      headAlignmentScore: Math.round(headAlignmentScore),
       elbowFlareScore: Math.round(elbowFlareScore),
       setupHint: framingHintText,
     });
@@ -363,7 +427,7 @@ export function addRepFrame(accumulator: RepAccumulator, frame: PoseAnalysis, bo
 const average = (values: number[]) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0);
 
 /** Scores the rep from the bottom window: frames within BOTTOM_WINDOW_DEGREES of the deepest elbow angle. */
-export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number): SessionRep | null {
+export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number, control?: RepControl): SessionRep | null {
   if (!accumulator.bottomFrames.length) return null;
   const deepest = Math.min(...accumulator.bottomFrames.map((sample) => sample.elbowAngle));
   const window = accumulator.bottomFrames.filter((sample) => sample.elbowAngle <= deepest + BOTTOM_WINDOW_DEGREES);
@@ -373,7 +437,8 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
     return values.length ? Math.round(average(values)) : null;
   };
 
-  const depth = pick((sample) => sample.depth);
+  // Median of the deepest few frames: how low the rep actually went, robust to one glitchy frame.
+  const depth = median([...window].sort((a, b) => a.elbowAngle - b.elbowAngle).slice(0, DEPTH_SAMPLE_FRAMES).map((sample) => sample.depth)) ?? 0;
   const plankSamples = window.filter((sample) => sample.bodyLine !== null);
   const bodyLine = median(plankSamples.map((sample) => sample.bodyLine as number));
   const plankRaw = median(plankSamples.map((sample) => sample.plankRaw).filter((value): value is number => value !== null));
@@ -385,13 +450,19 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
   );
   const headAlignment = pick((sample) => sample.headAlignment);
   const handStack = pick((sample) => sample.handStack);
-  const score = weightedRepScore(analysis.viewMode, { depth, bodyLine, elbowFlare, handStack, headAlignment });
+  const formScore = weightedRepScore(analysis.viewMode, { depth, bodyLine, elbowFlare, handStack, headAlignment });
+  const penalty = controlPenalty(control);
+  const controlNotes = [
+    ...(penalty.rushed ? [RUSHED_NOTE] : []),
+    ...(penalty.lockout ? [LOCKOUT_NOTE] : []),
+  ];
 
   return {
     index,
     viewMode: analysis.viewMode,
-    score,
-    notes: [...new Set(window.flatMap((sample) => sample.notes))].slice(0, 6),
+    score: Math.max(0, formScore - penalty.rushed - penalty.lockout),
+    notes: [...new Set([...controlNotes, ...window.flatMap((sample) => sample.notes)])].slice(0, 6),
+    ...(control ? { durationMs: Math.round(control.durationMs), lockoutAngle: Math.round(control.lockoutAngle), controlPenalty: penalty.rushed + penalty.lockout } : {}),
     elbowDepthScore: Math.round(depth),
     bodyLineScore: bodyLine === null ? null : Math.round(bodyLine),
     plankMethod,

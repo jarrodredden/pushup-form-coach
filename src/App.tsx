@@ -80,6 +80,7 @@ import {
   REP_BOTTOM_ANGLE,
   REP_TOP_ANGLE,
   withElbowNote,
+  type RepControl,
 } from './lib/scoring';
 import {
   activeStepKey,
@@ -1063,12 +1064,12 @@ export default function App() {
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
   };
 
-  const finishRep = (analysisFrame: PoseAnalysis) => {
+  const finishRep = (analysisFrame: PoseAnalysis, control: RepControl) => {
     const accumulator = repAccumulatorRef.current;
     repAccumulatorRef.current = createEmptyRepAccumulator();
     if (!accumulator.bottomFrames.length) return;
     const nextRepIndex = repCounterRef.current.next();
-    const rep = finalizeRep(accumulator, analysisFrame, nextRepIndex);
+    const rep = finalizeRep(accumulator, analysisFrame, nextRepIndex, control);
     if (!rep) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     rep.feedbackMode = feedbackModeRef.current;
@@ -1082,7 +1083,8 @@ export default function App() {
       'rep',
       `Rep ${rep.index}${attempt ? ` (set ${attempt})` : ''} scored ${rep.score}/100`,
       [
-        `depth ${rep.elbowDepthScore} · plank ${rep.bodyLineScore ?? 'n/a'} · elbow ${rep.elbowFlareScore}${rep.elbowAbduction === undefined ? '' : ` (${rep.elbowAbduction}°)`}`,
+        `depth ${rep.elbowDepthScore} (${rep.bottomElbowAngle}°) · plank ${rep.bodyLineScore ?? 'n/a'} · elbow ${rep.elbowFlareScore}${rep.elbowAbduction === undefined ? '' : ` (${rep.elbowAbduction}°)`} · hands ${rep.handStackScore} · head ${rep.headAlignmentScore}`,
+        `${((rep.durationMs ?? 0) / 1000).toFixed(1)} s, lockout ${rep.lockoutAngle ?? '–'}°${rep.controlPenalty ? `, −${rep.controlPenalty} control` : ''}`,
         `plank: ${rep.plankDebug ?? 'n/a'}`,
         ...rep.notes,
       ].join(' • '),
@@ -1244,7 +1246,7 @@ export default function App() {
         return;
       case 'rep':
         lockoutStallRef.current = { since: 0, cued: false };
-        finishRep(frame);
+        finishRep(frame, { durationMs: repInProgressMs(previous, now), lockoutAngle: previous.topPeak });
         return;
       default:
         break;
