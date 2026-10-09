@@ -53,6 +53,8 @@ export interface RepFrameSample {
   hipBias: number;
   handStack: number;
   notes: string[];
+  /** Too little of the body was visible to measure this frame. */
+  lowSignal?: boolean;
 }
 
 export interface RepAccumulator {

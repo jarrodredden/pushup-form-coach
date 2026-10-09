@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SIDE_CAMERA, type Camera } from './idealPushup';
 import { updatePlankReference, type PlankReference } from './plankLine';
 import { modelLandmarks } from './poseFixtures';
-import { createRepMachine, plankPosture, repInProgressMs, stepRep } from './repGate';
-import { addRepFrame, analyzePose, createEmptyRepAccumulator, finalizeRep, REP_BOTTOM_ANGLE, REP_TOP_ANGLE } from './scoring';
+import { countingElbowAngle, createRepTracker, plankPosture, trackRep } from './repGate';
+import { analyzePose } from './scoring';
 import { summarizeReps } from './sessionFlow';
 import type { CameraViewMode, PosePoint, SessionRep } from './types';
 
@@ -85,26 +85,18 @@ function depthForAngle(form: RepForm, angle: number, view: CameraViewMode) {
 function runSet(profile: string, view: CameraViewMode): SessionRep[] {
   const { base, spread } = PROFILES[profile];
   const { aspect } = VIEWS[view];
-  let machine = createRepMachine();
-  let accumulator = createEmptyRepAccumulator();
+  let tracker = createRepTracker();
   let reference: PlankReference = {};
   const reps: SessionRep[] = [];
   let now = 0;
   const frame = (form: RepForm, depth: number) => {
     const landmarks = landmarksFor(form, depth, view);
     const analysis = analyzePose(landmarks, view, { aspect, plankReference: reference });
-    if (view === 'head-on' && analysis.elbowAngle >= REP_TOP_ANGLE) reference = updatePlankReference(reference, landmarks, aspect);
-    const posture = plankPosture(landmarks, view, aspect, analysis.elbowAngle);
-    const previous = machine;
-    const step = stepRep(machine, { elbowAngle: analysis.elbowAngle, horizontal: posture.horizontal, now });
-    machine = step.state;
-    if (step.accumulate) accumulator = addRepFrame(accumulator, analysis, REP_BOTTOM_ANGLE);
-    if (step.event === 'armed' || step.event === 'top') accumulator = createEmptyRepAccumulator();
-    if (step.event === 'rep') {
-      const rep = finalizeRep(accumulator, analysis, reps.length + 1, { durationMs: repInProgressMs(previous, now), lockoutAngle: previous.topPeak });
-      if (rep) reps.push(rep);
-      accumulator = createEmptyRepAccumulator();
-    }
+    const posture = plankPosture(landmarks, view, aspect, countingElbowAngle(landmarks, aspect));
+    if (view === 'head-on' && posture.atTop) reference = updatePlankReference(reference, landmarks, aspect);
+    const step = trackRep(tracker, { landmarks, analysis, posture, aspect, now });
+    tracker = step.tracker;
+    if (step.rep) reps.push({ ...step.rep, index: reps.length + 1 });
     now += FRAME_MS;
   };
   const hold = (form: RepForm, depth: number, ms: number) => {
@@ -139,8 +131,8 @@ describe('score distribution on synthetic volunteers', () => {
       console.log(`\n${view}\n${rows.map((row) => `${row.profile.padEnd(8)} set ${String(row.set).padStart(3)}  reps ${row.reps.join(', ')}`).join('\n')}`);
       if (process.env.SCORE_BANDS === 'off') return;
       const set = Object.fromEntries(rows.map((row) => [row.profile, row.set]));
-      // The sloppy set's fastest rep (0.7 s) is too quick to count.
-      rows.forEach((row) => expect(row.count).toBeGreaterThanOrEqual(row.profile === 'sloppy' ? 4 : 5));
+      // Every rep counts, however sloppy; form only changes the score.
+      rows.forEach((row) => expect(row.count).toBe(5));
       expect(set.perfect).toBe(100);
       expect(set.good).toBeGreaterThanOrEqual(78);
       expect(set.good).toBeLessThanOrEqual(90);

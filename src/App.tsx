@@ -56,7 +56,7 @@ import {
   type StageLayout,
 } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
-import { createRepMachine, plankPosture, repInProgressMs, stepRep, type PlankPosture } from './lib/repGate';
+import { countingElbowAngle, createRepTracker, plankPosture, REP_DOWN_ANGLE, REP_UP_ANGLE, trackRep, type PlankPosture, type RepStep } from './lib/repGate';
 import { AUTO_START_HOLD_MS, createPositionWatch, MANUAL_START_AFTER_MS, watchPosition } from './lib/autoStart';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
@@ -72,15 +72,9 @@ import {
   type CorrectionKey,
 } from './lib/repFeedback';
 import {
-  addRepFrame,
   analyzePose,
-  createEmptyRepAccumulator,
-  finalizeRep,
   MIN_SIGNAL,
-  REP_BOTTOM_ANGLE,
-  REP_TOP_ANGLE,
   withElbowNote,
-  type RepControl,
 } from './lib/scoring';
 import {
   activeStepKey,
@@ -156,7 +150,9 @@ type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
 const nowIso = () => new Date().toISOString();
 const cameraViewLabel = (view: CameraViewMode) => (view === 'head-on' ? 'front' : 'side');
-const NO_POSTURE: PlankPosture = { horizontal: false, armsExtended: false, atTop: false, reason: 'no pose' };
+const NO_POSTURE: PlankPosture = { horizontal: false, upright: false, armsExtended: false, atTop: false, reason: 'no pose' };
+/** Not armed this long after Go → log why, once per set. */
+const ARM_WAIT_LOG_MS = 3000;
 const GET_INTO_POSITION = 'Get into your push-up position';
 const GET_BACK_INTO_POSITION = 'Get back into your push-up position';
 /** Arms held in this band after the bottom for LOCKOUT_STALL_MS means the rep stopped short of lockout. */
@@ -275,8 +271,11 @@ export default function App() {
   const confidenceSmoothRef = useRef(0);
   const activeFailureRef = useRef({ text: '', frames: 0, startedAt: 0 });
   const runningRef = useRef(false);
-  const repAccumulatorRef = useRef(createEmptyRepAccumulator());
-  const repMachineRef = useRef(createRepMachine());
+  const repTrackerRef = useRef(createRepTracker());
+  const repGoAtRef = useRef({ at: 0, logged: false });
+  /** Last counter step, for the admin readout. */
+  const repDiagRef = useRef<{ step: RepStep | null; note: string }>({ step: null, note: '' });
+  const frameInputRef = useRef<{ landmarks: PosePoint[] | null | undefined; aspect: number }>({ landmarks: null, aspect: 0.75 });
   const lockoutStallRef = useRef({ since: 0, cued: false });
   /** Plank posture of the latest pose frame (body horizontal / arms straight). */
   const postureRef = useRef<PlankPosture>(NO_POSTURE);
@@ -781,9 +780,10 @@ export default function App() {
 
   /** Every set starts from nothing: no half-finished rep, no smoothing history, no tempo phase. */
   const resetRepTracking = () => {
-    repMachineRef.current = createRepMachine();
+    repTrackerRef.current = createRepTracker();
+    repGoAtRef.current = { at: Date.now(), logged: false };
+    repDiagRef.current = { step: null, note: '' };
     lockoutStallRef.current = { since: 0, cued: false };
-    repAccumulatorRef.current = createEmptyRepAccumulator();
     elbowSmootherRef.current.reset();
     tempoStateRef.current = createTempoState(performance.now());
   };
@@ -1064,13 +1064,9 @@ export default function App() {
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
   };
 
-  const finishRep = (analysisFrame: PoseAnalysis, control: RepControl) => {
-    const accumulator = repAccumulatorRef.current;
-    repAccumulatorRef.current = createEmptyRepAccumulator();
-    if (!accumulator.bottomFrames.length) return;
+  const finishRep = (scored: SessionRep) => {
     const nextRepIndex = repCounterRef.current.next();
-    const rep = finalizeRep(accumulator, analysisFrame, nextRepIndex, control);
-    if (!rep) return;
+    const rep: SessionRep = { ...scored, index: nextRepIndex };
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     rep.feedbackMode = feedbackModeRef.current;
     rep.tempoCues = tempoCuesActive();
@@ -1153,7 +1149,7 @@ export default function App() {
     if (!tempoCuesActive()) return;
     const attempt = workflowModeRef.current === 'coaching' ? attemptForTrialState(coachingTrialStateRef.current) : 0;
     // A rep that reached the bottom completes at this lockout; if it's the set's last, no Down follows.
-    const repsAfterThisTop = attempt ? attemptRepCountRef.current[attempt] + (repMachineRef.current.sawBottom ? 1 : 0) : 0;
+    const repsAfterThisTop = attempt ? attemptRepCountRef.current[attempt] + (repTrackerRef.current.machine.phase === 'bottom' ? 1 : 0) : 0;
     const step = stepTempo(tempoStateRef.current, {
       elbowAngle: frame.elbowAngle,
       depthScore: frame.elbowDepthScore,
@@ -1205,55 +1201,65 @@ export default function App() {
     );
   };
 
+  /**
+   * Counting runs on every frame after Go, low-signal ones included (a dim wrist at the bottom still
+   * bends); rejections and the reason it isn't counting yet go to the Diagnostics log.
+   */
   const updateRepState = (frame: PoseAnalysis) => {
     if (calibrationStateRef.current !== 'counting') return;
-    const { elbowAngle, confidence } = frame;
     const now = Date.now();
-    if (confidence < MIN_SIGNAL) return;
-    const previous = repMachineRef.current;
+    const readable = frame.confidence >= MIN_SIGNAL;
     // No Up/Down while they're still getting into position.
-    if (previous.armed) stepTempoCues(frame);
+    if (repTrackerRef.current.machine.armed && readable) stepTempoCues(frame);
 
     const posture = postureRef.current;
-    const step = stepRep(previous, { elbowAngle, horizontal: posture.horizontal, now });
-    repMachineRef.current = step.state;
-    if (step.accumulate) repAccumulatorRef.current = addRepFrame(repAccumulatorRef.current, frame, REP_BOTTOM_ANGLE);
+    const { landmarks, aspect } = frameInputRef.current;
+    const step = trackRep(repTrackerRef.current, { landmarks, analysis: frame, posture, aspect, now });
+    repTrackerRef.current = step.tracker;
+    const degrees = (value: number | null | undefined) => (value === null || value === undefined ? '–' : `${Math.round(value)}°`);
+    const note = (text: string) => {
+      repDiagRef.current = { step, note: text };
+      pushLog('info', text);
+    };
+    repDiagRef.current = { ...repDiagRef.current, step };
 
     switch (step.event) {
       case 'armed':
-        repAccumulatorRef.current = createEmptyRepAccumulator();
-        pushLog('system', 'Top position locked in. Counting reps.');
-        return;
-      case 'top':
-        repAccumulatorRef.current = createEmptyRepAccumulator();
+        repDiagRef.current.note = 'armed';
+        pushLog('system', `Top position locked in (arms ${degrees(step.angle)}). Counting reps.`);
         return;
       case 'disarmed':
-        repAccumulatorRef.current = createEmptyRepAccumulator();
         lockoutStallRef.current = { since: 0, cued: false };
         tempoStateRef.current = createTempoState(performance.now());
-        pushLog('info', `Left the plank (${posture.reason}). Hold the top of a push-up to count again.`);
+        note(`Counting paused: stood or knelt up (${posture.reason}). Back to the top of a push-up to keep counting.`);
         return;
       case 'rejected-fast':
-      case 'rejected-posture':
-        repAccumulatorRef.current = createEmptyRepAccumulator();
         lockoutStallRef.current = { since: 0, cued: false };
-        pushLog(
-          'info',
-          step.event === 'rejected-fast'
-            ? `Rep not counted: down and up in ${repInProgressMs(previous, now)} ms is too fast to be real.`
-            : 'Rep not counted: the body wasn’t in a plank for most of it.',
-        );
+        note(`Rep not counted: down to ${degrees(step.deepest)} and back up in ${step.durationMs} ms is too fast to be a real push-up (pose glitch).`);
+        return;
+      case 'shallow':
+        note(`Rep not counted: bent only to ${degrees(step.deepest)} and came back up (counting needs ${REP_DOWN_ANGLE}° or less).`);
         return;
       case 'rep':
         lockoutStallRef.current = { since: 0, cued: false };
-        finishRep(frame, { durationMs: repInProgressMs(previous, now), lockoutAngle: previous.topPeak });
+        repDiagRef.current.note = `rep: down to ${degrees(step.deepest)}, ${step.durationMs} ms`;
+        if (step.rep) finishRep(step.rep);
         return;
       default:
         break;
     }
 
+    const goAt = repGoAtRef.current;
+    if (!step.state.armed && !goAt.logged && now - goAt.at >= ARM_WAIT_LOG_MS) {
+      goAt.logged = true;
+      note(
+        `Not counting yet: waiting for the top of a push-up (arms ${degrees(step.angle)}, needs ${REP_UP_ANGLE}°; ${posture.upright ? 'upright' : posture.reason}).`,
+      );
+    }
+
     const stall = lockoutStallRef.current;
-    const stalledShort = step.state.sawBottom && elbowAngle >= LOCKOUT_STALL_MIN_ANGLE && elbowAngle < REP_TOP_ANGLE;
+    const angle = step.angle;
+    const stalledShort = readable && step.state.phase === 'bottom' && angle !== null && angle >= LOCKOUT_STALL_MIN_ANGLE && angle < REP_UP_ANGLE;
     stall.since = stalledShort ? stall.since || now : 0;
     if (stalledShort && !stall.cued && now - stall.since >= LOCKOUT_STALL_MS && feedbackModeRef.current !== 'control') {
       stall.cued = true;
@@ -1302,6 +1308,7 @@ export default function App() {
 
     if (frame.confidence < MIN_SIGNAL) {
       setCurrentCue(frame.setupHint ?? 'Move your whole body into frame.');
+      if (isCounting && !(workflowModeRef.current === 'coaching' && coachingPausedRef.current)) updateRepState(frame);
       return;
     }
 
@@ -1629,8 +1636,9 @@ export default function App() {
       const aspect = size ? size.width / size.height : 0.75;
       const plankReference = plankReferenceRef.current;
       const frame = applyBaselineBias(analyzePose(landmarks, cameraView, { worldLandmarks, aspect, plankReference }));
-      const posture = plankPosture(landmarks, cameraView, aspect, frame.elbowAngle);
+      const posture = plankPosture(landmarks, cameraView, aspect, countingElbowAngle(landmarks, aspect));
       postureRef.current = posture;
+      frameInputRef.current = { landmarks, aspect };
       const inPlank = calibrationStateRef.current !== 'idle' && calibrationStateRef.current !== 'checking' && !isResting() && posture.atTop;
       if (cameraView === 'head-on' && inPlank && frame.confidence >= 0.72) {
         plankReferenceRef.current = updatePlankReference(plankReference, landmarks, aspect);

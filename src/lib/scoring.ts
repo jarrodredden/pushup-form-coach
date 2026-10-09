@@ -59,6 +59,7 @@ export const FULL_LOCKOUT_ANGLE = 165;
 const LOCKOUT_MAX_PENALTY = 10;
 
 export const RUSHED_NOTE = 'Rushed — take about two seconds, down and up.';
+export const UNREADABLE_REP_NOTE = 'Counted, but the body wasn’t visible enough to score it.';
 export const LOCKOUT_NOTE = 'Straighten the arms fully at the top.';
 
 export interface RepControl {
@@ -406,6 +407,7 @@ function sampleFromFrame(frame: PoseAnalysis): RepFrameSample {
     hipBias: frame.hipBias,
     handStack: frame.handStackScore,
     notes: frame.notes.filter((note) => note !== frame.setupHint),
+    lowSignal: frame.confidence < MIN_SIGNAL,
   };
 }
 
@@ -429,8 +431,11 @@ const average = (values: number[]) => (values.length ? values.reduce((sum, value
 /** Scores the rep from the bottom window: frames within BOTTOM_WINDOW_DEGREES of the deepest elbow angle. */
 export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis, index: number, control?: RepControl): SessionRep | null {
   if (!accumulator.bottomFrames.length) return null;
-  const deepest = Math.min(...accumulator.bottomFrames.map((sample) => sample.elbowAngle));
-  const window = accumulator.bottomFrames.filter((sample) => sample.elbowAngle <= deepest + BOTTOM_WINDOW_DEGREES);
+  // Low-signal frames carry placeholder angles and zero scores: use them only if nothing better was seen.
+  const readable = accumulator.bottomFrames.filter((sample) => !sample.lowSignal);
+  const pool = readable.length ? readable : accumulator.bottomFrames;
+  const deepest = Math.min(...pool.map((sample) => sample.elbowAngle));
+  const window = pool.filter((sample) => sample.elbowAngle <= deepest + BOTTOM_WINDOW_DEGREES);
   const pick = (select: (sample: RepFrameSample) => number) => average(window.map(select));
   const pickNullable = (select: (sample: RepFrameSample) => number | null) => {
     const values = window.map(select).filter((value): value is number => value !== null);
@@ -457,11 +462,12 @@ export function finalizeRep(accumulator: RepAccumulator, analysis: PoseAnalysis,
     ...(penalty.lockout ? [LOCKOUT_NOTE] : []),
   ];
 
+  const unreadable = !readable.length;
   return {
     index,
     viewMode: analysis.viewMode,
-    score: Math.max(0, formScore - penalty.rushed - penalty.lockout),
-    notes: [...new Set([...controlNotes, ...window.flatMap((sample) => sample.notes)])].slice(0, 6),
+    score: unreadable ? 0 : Math.max(0, formScore - penalty.rushed - penalty.lockout),
+    notes: unreadable ? [UNREADABLE_REP_NOTE] : [...new Set([...controlNotes, ...window.flatMap((sample) => sample.notes)])].slice(0, 6),
     ...(control ? { durationMs: Math.round(control.durationMs), lockoutAngle: Math.round(control.lockoutAngle), controlPenalty: penalty.rushed + penalty.lockout } : {}),
     elbowDepthScore: Math.round(depth),
     bodyLineScore: bodyLine === null ? null : Math.round(bodyLine),
