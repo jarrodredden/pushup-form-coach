@@ -180,7 +180,7 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--shadow);
   isolation: isolate;
 }
-.app--break .stage { height: 220px; height: max(200px, 30vh); height: max(200px, 30svh); }
+.app--break:not(.is-positioning) .stage { height: 220px; height: max(200px, 30vh); height: max(200px, 30svh); }
 .stage__diag {
   position: absolute;
   top: 150px;
@@ -319,6 +319,8 @@ h1, h2, h3, p { margin: 0; }
   font-weight: 700;
 }
 .stage__announce { font-size: clamp(1.3rem, 5vw, 1.8rem); padding: 12px 22px; color: var(--volt); }
+.hold-bar { width: 160px; height: 8px; border-radius: 999px; background: rgba(10, 12, 15, 0.72); overflow: hidden; }
+.hold-bar span { display: block; height: 100%; background: var(--volt); transition: width 120ms linear; }
 
 .ring { position: relative; width: 140px; height: 140px; }
 .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
@@ -1125,7 +1127,7 @@ h1, h2, h3, p { margin: 0; }
   }
   .app--setup .layout, .app--results .layout { grid-template-columns: minmax(0, 640px); justify-content: center; }
   .stage-col { position: sticky; top: 112px; }
-  .stage, .app--break .stage { height: min(820px, calc(100vh - 150px)); }
+  .stage, .app--break:not(.is-positioning) .stage { height: min(820px, calc(100vh - 150px)); }
   .dock {
     position: sticky;
     bottom: 0;

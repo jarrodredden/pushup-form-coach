@@ -130,7 +130,7 @@ export function BreakPanel({
             <p className="fine-print">
               {resting
                 ? 'Catch your breath so set 2 isn’t skewed by fatigue. Review your focus below — set 2 unlocks when the timer hits 0:00.'
-                : 'You’re rested. Tap Start set 2 when you’re ready.'}
+                : 'You’re rested. Get into your push-up position and hold the top — set 2 counts down on its own.'}
             </p>
             {adminUnlocked && resting ? (
               <button type="button" className="btn btn--ghost btn--small rest-card__admin" onClick={onAdminSkipRest}>

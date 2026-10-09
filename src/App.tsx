@@ -56,6 +56,7 @@ import {
 } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
 import { createRepMachine, plankPosture, repInProgressMs, stepRep, type PlankPosture } from './lib/repGate';
+import { AUTO_START_HOLD_MS, createPositionWatch, MANUAL_START_AFTER_MS, watchPosition } from './lib/autoStart';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
 import { updatePlankReference, type PlankReference } from './lib/plankLine';
@@ -154,6 +155,8 @@ type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 const nowIso = () => new Date().toISOString();
 const cameraViewLabel = (view: CameraViewMode) => (view === 'head-on' ? 'front' : 'side');
 const NO_POSTURE: PlankPosture = { horizontal: false, armsExtended: false, atTop: false, reason: 'no pose' };
+const GET_INTO_POSITION = 'Get into your push-up position';
+const GET_BACK_INTO_POSITION = 'Get back into your push-up position';
 /** Arms held in this band after the bottom for LOCKOUT_STALL_MS means the rep stopped short of lockout. */
 const LOCKOUT_STALL_MIN_ANGLE = 135;
 const LOCKOUT_STALL_MS = 1200;
@@ -275,6 +278,11 @@ export default function App() {
   const lockoutStallRef = useRef({ since: 0, cued: false });
   /** Plank posture of the latest pose frame (body horizontal / arms straight). */
   const postureRef = useRef<PlankPosture>(NO_POSTURE);
+  /** Set 2 after the rest: waiting for a held plank to start the countdown (ms timestamp), or null. */
+  const positionWaitRef = useRef<number | null>(null);
+  /** Which set's countdown was started by holding the position (and stops if they leave it). */
+  const watchedCountdownRef = useRef<0 | 1 | 2>(0);
+  const positionWatchRef = useRef(createPositionWatch());
   const repCounterRef = useRef(createRepCounter());
   const attemptRepCountRef = useRef<Record<1 | 2, number>>({ 1: 0, 2: 0 });
   const frameHandlerRef = useRef<(landmarks: PosePoint[] | undefined, worldLandmarks?: PosePoint[]) => void>(() => undefined);
@@ -316,6 +324,9 @@ export default function App() {
   const [coachingPaused, setCoachingPaused] = useState(false);
   const [restStartedAt, setRestStartedAt] = useState<number | null>(null);
   const [restBypassed, setRestBypassed] = useState(false);
+  const [positionWaitSince, setPositionWaitSince] = useState<number | null>(null);
+  const [positionHoldPct, setPositionHoldPct] = useState(0);
+  const [manualStartVisible, setManualStartVisible] = useState(false);
   const [restNow, setRestNow] = useState(() => Date.now());
   const [adminUnlocked, setAdminUnlocked] = useState(() => localStorage.getItem(ADMIN_UNLOCK_KEY) === '1');
   const [adminOpen, setAdminOpen] = useState(false);
@@ -483,15 +494,23 @@ export default function App() {
       setRestNow(now);
       if (restRemainingMs(restStartedAt, now) > 0) return;
       window.clearInterval(timer);
-      setCurrentCue('Rest complete. Start set 2 when you’re ready.');
-      setToast({ tone: 'success', text: 'Rest complete — set 2 is unlocked.' });
-      pushLog('system', 'Rest complete. Set 2 unlocked.');
+      setToast({ tone: 'success', text: 'Rest complete — get into position for set 2.' });
+      pushLog('system', 'Rest complete. Waiting for the push-up position to start set 2.');
       if (audioContextRef.current && audioUnlockedRef.current && feedbackModeRef.current !== 'visual') {
         playCueTone(audioContextRef.current);
       }
+      waitForPosition(GET_INTO_POSITION);
     }, 250);
     return () => window.clearInterval(timer);
+    // waitForPosition only touches refs and stable setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coachingTrialState, restStartedAt, restBypassed]);
+
+  useEffect(() => {
+    if (positionWaitSince === null) return;
+    const timer = window.setTimeout(() => setManualStartVisible(true), Math.max(0, positionWaitSince + MANUAL_START_AFTER_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [positionWaitSince]);
 
   const setCalibration = (next: CalibrationState) => {
     calibrationStateRef.current = next;
@@ -531,6 +550,8 @@ export default function App() {
   const steps = journeySteps(workflowMode);
   const stepKey = activeStepKey(phase, workflowMode, coachingTrialState, Boolean(athleteName.trim()));
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
+  /** The rest shows a short preview; getting into position for set 2 brings the full one back. */
+  const stageCompact = phase === 'break' && positionWaitSince === null;
   const restRemaining = restBypassed ? 0 : restRemainingMs(restStartedAt, restNow);
   const restLocked = coachingTrialState === 'between-attempts' && restRemaining > 0;
   const restClock = formatRestClock(restRemaining);
@@ -731,6 +752,7 @@ export default function App() {
         }
 
         clearCalibrationTimers();
+        watchedCountdownRef.current = 0;
         setCountdownValue(null);
         setCalibration('counting');
         setShowGoOverlay(true);
@@ -762,6 +784,69 @@ export default function App() {
     tempoStateRef.current = createTempoState(performance.now());
   };
 
+  /** Spoken like the countdown (an instruction, not coaching), whenever the coming set's mode has audio. */
+  const speakInstruction = (text: string, mode = feedbackModeRef.current) => {
+    if (currentModeAllows(mode).audio && audioUnlockedRef.current) speak(text);
+  };
+  const setTwoMode = () => feedbackModeFor(feedbackSettingRef.current, workflowModeRef.current, 'attempt-2');
+
+  /** After the rest: holding the top of a push-up starts set 2 (watchSetTwoStart). */
+  const waitForPosition = (prompt: string) => {
+    const now = Date.now();
+    positionWaitRef.current = now;
+    positionWatchRef.current = createPositionWatch();
+    setPositionWaitSince(now);
+    setPositionHoldPct(0);
+    setManualStartVisible(false);
+    holdCue(prompt, 4000);
+    speakInstruction(prompt, setTwoMode());
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const stopWaitingForPosition = () => {
+    positionWaitRef.current = null;
+    setPositionWaitSince(null);
+    setPositionHoldPct(0);
+    setManualStartVisible(false);
+  };
+
+  const watchSetTwoStart = () => {
+    const posture = postureRef.current;
+    const now = Date.now();
+    const step = watchPosition(positionWatchRef.current, { atTop: posture.atTop, horizontal: posture.horizontal, now });
+    positionWatchRef.current = step.state;
+    const { topSince } = step.state;
+    const pct = topSince === null ? 0 : Math.min(100, Math.floor(((now - topSince) / AUTO_START_HOLD_MS) * 10) * 10);
+    setPositionHoldPct(pct);
+    if (step.holding) startSetTwo('auto');
+  };
+
+  /** A countdown started by holding the position stops if they drop out of the plank. */
+  const watchCountdownPosition = () => {
+    const posture = postureRef.current;
+    const step = watchPosition(positionWatchRef.current, { atTop: posture.atTop, horizontal: posture.horizontal, now: Date.now() });
+    positionWatchRef.current = step.state;
+    if (!step.left) return false;
+    const set = watchedCountdownRef.current;
+    watchedCountdownRef.current = 0;
+    clearCalibrationTimers();
+    clearVoiceQueue();
+    setCountdownValue(null);
+    pushLog('info', `Left the push-up position during the countdown (${posture.reason}). Countdown stopped.`);
+    if (set === 2) {
+      setTrialState('between-attempts');
+      setPaused(true);
+      setCalibration('counting');
+      waitForPosition(GET_BACK_INTO_POSITION);
+    } else {
+      stableCalibrationFramesRef.current = 0;
+      setCalibration('checking');
+      holdCue(GET_BACK_INTO_POSITION, 3000);
+      speakInstruction(GET_BACK_INTO_POSITION);
+    }
+    return true;
+  };
+
   const clearSessionData = () => {
     setSessionReps([]);
     setSessionLogs([]);
@@ -785,6 +870,8 @@ export default function App() {
     plankReferenceRef.current = {};
     setRestStartedAt(null);
     setRestBypassed(false);
+    stopWaitingForPosition();
+    watchedCountdownRef.current = 0;
   };
 
   const unlockSound = async () => {
@@ -799,6 +886,7 @@ export default function App() {
       'lets-get-started',
       'go',
       'back-up-for-hands-and-torso',
+      ...[GET_INTO_POSITION, GET_BACK_INTO_POSITION].flatMap((line) => resolveVoiceClipNames(line) ?? []),
       ...allFeedbackLines()
         .filter((line) => !line.includes('improved by'))
         .flatMap((line) => resolveVoiceClipNames(line) ?? []),
@@ -1180,7 +1268,12 @@ export default function App() {
     setCalibrationConfidence(Math.round(smoothConfidence * 100));
 
     // The rest between sets is coaching-free: the live pose triggers no cues, banners, or speech.
-    if (isResting()) return;
+    // Once it's over the pose is only watched for the push-up position that starts set 2.
+    if (isResting()) {
+      if (positionWaitRef.current !== null) watchSetTwoStart();
+      return;
+    }
+    if (calibrationStateRef.current === 'countdown' && watchedCountdownRef.current && watchCountdownPosition()) return;
 
     const isCounting = calibrationStateRef.current === 'counting';
     const lostTrackingText = 'Move back — body lost';
@@ -1211,7 +1304,12 @@ export default function App() {
     const currentModeAllowsAudio = feedbackModeRef.current === 'audio' || feedbackModeRef.current === 'combined';
 
     if (calibrationStateRef.current !== 'counting') {
-      if (isCalibrationReady(frame)) {
+      const ready = isCalibrationReady(frame);
+      if (ready && !postureRef.current.atTop && calibrationStateRef.current !== 'countdown') {
+        stableCalibrationFramesRef.current = 0;
+        if (calibrationStateRef.current === 'ready') setCalibration('checking');
+        setCurrentCue('Hold the top of a push-up');
+      } else if (ready) {
         stableCalibrationFramesRef.current += 1;
         if (stableCalibrationFramesRef.current >= 3 && calibrationStateRef.current === 'checking') {
           setCalibration('ready');
@@ -1506,22 +1604,22 @@ export default function App() {
 
   // Screen changes resize the stage (the break shows a shorter preview). Log the numbers once the
   // layout settles, and on iOS rebuild the video layer so it can't keep the previous screen's fit.
-  const previousPhaseRef = useRef(phase);
+  const screenKey = stageCompact ? `${phase} (compact)` : phase;
+  const previousScreenRef = useRef({ key: screenKey, compact: stageCompact });
   useEffect(() => {
-    const previous = previousPhaseRef.current;
-    previousPhaseRef.current = phase;
-    if (cameraStatus !== 'live' || previous === phase || !cameraActive) return;
-    const stageResized = (previous === 'break') !== (phase === 'break');
+    const previous = previousScreenRef.current;
+    previousScreenRef.current = { key: screenKey, compact: stageCompact };
+    if (cameraStatus !== 'live' || previous.key === screenKey || !cameraActive) return;
     const timers: number[] = [];
-    if (IS_IOS && stageResized) timers.push(window.setTimeout(() => reattachStream(`${previous} → ${phase}`), 120));
-    timers.push(window.setTimeout(() => pushLog('info', `Preview on ${phase} screen.`, stageDiagnosticsText()), 700));
+    if (IS_IOS && previous.compact !== stageCompact) timers.push(window.setTimeout(() => reattachStream(`${previous.key} → ${screenKey}`), 120));
+    timers.push(window.setTimeout(() => pushLog('info', `Preview on ${screenKey} screen.`, stageDiagnosticsText()), 700));
     return () => timers.forEach((id) => window.clearTimeout(id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [screenKey]);
 
   useEffect(() => {
     frameHandlerRef.current = (landmarks, worldLandmarks) => {
-      drawSkeleton(modeAllowsVisuals && !isResting() ? landmarks : null);
+      drawSkeleton(modeAllowsVisuals && (!isResting() || positionWaitRef.current !== null) ? landmarks : null);
       const size = currentFrameSize();
       const aspect = size ? size.width / size.height : 0.75;
       const plankReference = plankReferenceRef.current;
@@ -1539,6 +1637,8 @@ export default function App() {
   const stopCamera = () => {
     runningRef.current = false;
     clearCalibrationTimers();
+    stopWaitingForPosition();
+    watchedCountdownRef.current = 0;
     setCalibration('idle');
     setCountdownValue(null);
     setCalibrationConfidence(0);
@@ -1643,23 +1743,27 @@ export default function App() {
     void startCamera();
   };
 
-  const startSetTwo = () => {
+  /** `auto`: the push-up position was held, and the countdown stops if they leave it. */
+  const startSetTwo = (source: 'auto' | 'manual' = 'manual') => {
     if (restLocked) return;
+    stopWaitingForPosition();
     attemptRepCountRef.current[2] = 0;
     resetRepTracking();
     coachingFocusRef.current = { key: null, resolvedAt: null, cue: '' };
     setTrialState('attempt-2');
     setPaused(false);
-    pushLog('system', 'Set 2 started.');
+    pushLog('system', source === 'auto' ? 'Set 2 starting: push-up position held.' : 'Set 2 started from the button.');
     beginCountdown({ announce: false });
+    watchedCountdownRef.current = source === 'auto' ? 2 : 0;
+    positionWatchRef.current = createPositionWatch();
   };
 
   const skipRestAsAdmin = () => {
     if (!adminUnlocked || !restLocked) return;
     setRestBypassed(true);
     pushLog('system', `Admin skipped the rest with ${restClock} left.`);
-    setCurrentCue('Rest skipped by admin. Start set 2 when ready.');
     setToast({ tone: 'info', text: 'Admin: rest skipped for testing.' });
+    waitForPosition(GET_INTO_POSITION);
   };
 
   const stopSession = () => {
@@ -2146,6 +2250,8 @@ export default function App() {
     readyTimerRef.current = window.setTimeout(() => {
       readyTimerRef.current = null;
       beginCountdown();
+      watchedCountdownRef.current = 1;
+      positionWatchRef.current = createPositionWatch();
     }, 500);
 
     return () => {
@@ -2208,7 +2314,9 @@ export default function App() {
         : phase === 'break'
           ? restLocked
             ? `Rest ${restClock}`
-            : 'Coaching break'
+            : positionWaitSince !== null
+              ? 'Get in position'
+              : 'Coaching break'
           : workflowMode === 'coaching'
             ? `Set ${currentAttempt} of 2`
             : 'Free practice';
@@ -2254,20 +2362,20 @@ export default function App() {
         return (
           <div className="btn-row">
             <button className="btn btn--ghost" onClick={stopSession}>End</button>
-            <button
-              className="btn btn--primary btn--xl btn--grow"
-              onClick={startSetTwo}
-              disabled={restLocked}
-              aria-label={restLocked ? `Start set 2 unlocks after rest, ${restClock} left` : 'Start set 2'}
-            >
-              {restLocked ? (
-                <>
-                  <LockIcon /> Rest {restClock}
-                </>
-              ) : (
-                'Start set 2'
-              )}
-            </button>
+            {restLocked ? (
+              <button className="btn btn--primary btn--xl btn--grow" disabled aria-label={`Set 2 unlocks after rest, ${restClock} left`}>
+                <LockIcon /> Rest {restClock}
+              </button>
+            ) : positionWaitSince === null || manualStartVisible ? (
+              <>
+                {positionWaitSince !== null ? <span className="dock__status">Hold the top of a push-up…</span> : null}
+                <button className="btn btn--secondary" onClick={() => startSetTwo()}>
+                  Start set 2
+                </button>
+              </>
+            ) : (
+              <span className="dock__status">Get into your push-up position — set 2 starts when you hold it.</span>
+            )}
           </div>
         );
       case 'results':
@@ -2299,7 +2407,7 @@ export default function App() {
   };
 
   return (
-    <div className={`app app--${phase}`}>
+    <div className={`app app--${phase}${phase === 'break' && !stageCompact ? ' is-positioning' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand__mark" aria-hidden="true">
@@ -2391,6 +2499,15 @@ export default function App() {
                 ) : (
                   <span key={countdownValue} className="countdown-number">{countdownValue}</span>
                 )}
+              </div>
+            ) : null}
+
+            {phase === 'break' && positionWaitSince !== null && positionHoldPct > 0 ? (
+              <div className="stage__center" aria-live="polite">
+                <p className="stage__caption">Hold it…</p>
+                <div className="hold-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={positionHoldPct}>
+                  <span style={{ width: `${positionHoldPct}%` }} />
+                </div>
               </div>
             ) : null}
 

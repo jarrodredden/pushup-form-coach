@@ -41,6 +41,8 @@ const files = [
   ['get-ready', 'Get ready!'],
   ['lets-get-started', "Let's get started!"],
   ['go', 'Go!'],
+  ['get-into-your-push-up-position', 'Get into your push-up position'],
+  ['get-back-into-your-push-up-position', 'Get back into your push-up position'],
   ...Array.from({ length: 5 }, (_, i) => [`countdown-${i + 1}`, `${i + 1}!`]),
   ...Array.from({ length: 20 }, (_, i) => [`rep-${i + 1}`, `Rep ${i + 1}`]),
   ...tips.map((text) => [slugify(text), text]),
