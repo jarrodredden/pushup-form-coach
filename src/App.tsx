@@ -1023,6 +1023,11 @@ export default function App() {
       setRestNow(startedAt);
       setRestBypassed(false);
       pushLog('system', `Set 1 complete. ${formatRestClock(REST_BREAK_MS)} rest before set 2.`);
+      // Nothing from set 1's coaching carries into the rest.
+      clearVoiceQueue();
+      setActiveBanner(null);
+      activeFailureRef.current = { text: '', frames: 0, startedAt: 0 };
+      spokenFormCueRef.current = { key: null, at: 0 };
       holdCue('Set 1 done — nice work! Rest 2 minutes and watch the ideal form.', 6000);
       const breakMode = feedbackModeFor(feedbackSettingRef.current, workflowModeRef.current, 'between-attempts');
       if (currentModeAllows(breakMode).audio && audioUnlockedRef.current) {
@@ -1157,6 +1162,8 @@ export default function App() {
     }
   };
 
+  const isResting = () => workflowModeRef.current === 'coaching' && coachingTrialStateRef.current === 'between-attempts';
+
   const processAnalysis = (frame: PoseAnalysis) => {
     setAnalysis(frame);
     const smoothConfidence = confidenceSmoothRef.current
@@ -1164,6 +1171,9 @@ export default function App() {
       : frame.confidence;
     confidenceSmoothRef.current = smoothConfidence;
     setCalibrationConfidence(Math.round(smoothConfidence * 100));
+
+    // The rest between sets is coaching-free: the live pose triggers no cues, banners, or speech.
+    if (isResting()) return;
 
     const isCounting = calibrationStateRef.current === 'counting';
     const lostTrackingText = 'Move back — body lost';
@@ -1211,12 +1221,7 @@ export default function App() {
       return;
     }
 
-    if (workflowModeRef.current === 'coaching' && coachingPausedRef.current) {
-      if (feedbackModeRef.current !== 'control') {
-        updateCoachingFocus(frame);
-      }
-      return;
-    }
+    if (workflowModeRef.current === 'coaching' && coachingPausedRef.current) return;
 
     if (feedbackModeRef.current !== 'control') {
       updateCoachingFocus(frame);
@@ -1509,7 +1514,7 @@ export default function App() {
 
   useEffect(() => {
     frameHandlerRef.current = (landmarks, worldLandmarks) => {
-      drawSkeleton(modeAllowsVisuals ? landmarks : null);
+      drawSkeleton(modeAllowsVisuals && !isResting() ? landmarks : null);
       const size = currentFrameSize();
       const aspect = size ? size.width / size.height : 0.75;
       const plankReference = plankReferenceRef.current;
