@@ -8,6 +8,7 @@ import { SharePanel } from './components/SharePanel';
 import { BreakPanel, CalibratingPanel, LiveFormPanel, type ChecklistItem } from './components/LivePanels';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SetupPanel, type ConsentDriveState } from './components/SetupPanel';
+import { StageDiagnostics } from './components/StageDiagnostics';
 import { Stepper } from './components/Stepper';
 import {
   createBaselineReference,
@@ -55,6 +56,7 @@ import {
   type StageLayout,
 } from './lib/stageLayout';
 import { createRepCounter } from './lib/repCounter';
+import { showOnScreenDiagnostics } from './lib/adminDiagnostics';
 import { countingElbowAngle, createRepTracker, plankPosture, REP_DOWN_ANGLE, REP_UP_ANGLE, repLines, trackRep, type PlankPosture, type RepStep } from './lib/repGate';
 import { AUTO_START_HOLD_MS, createPositionWatch, MANUAL_START_AFTER_MS, watchPosition } from './lib/autoStart';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
@@ -131,7 +133,7 @@ const LEGACY_SESSION_STORAGE_KEY = 'pushup-form-coach-history';
 const SESSION_NAME_KEY = 'pushup-form-coach-name';
 const SOUND_WANTED_KEY = 'pushup-coach-sound-wanted';
 const ADMIN_UNLOCK_KEY = 'pushup-admin-pin-unlocked';
-const STAGE_DIAG_KEY = 'pushup-admin-stage-diagnostics';
+const LEGACY_STAGE_DIAG_KEY = 'pushup-admin-stage-diagnostics';
 /** Watchdog re-attaches allowed per camera stream, so a stubborn device can't flicker forever. */
 const MAX_WATCHDOG_REATTACHES = 2;
 const ADMIN_PIN = '180180';
@@ -333,8 +335,7 @@ export default function App() {
   const [adminSkipConsent, setAdminSkipConsent] = useState(false);
   const [adminNoSave, setAdminNoSave] = useState(false);
   const [sessionNoSave, setSessionNoSave] = useState(false);
-  const [stageDiagPinned, setStageDiagPinned] = useState(() => localStorage.getItem(STAGE_DIAG_KEY) === '1');
-  const [stageDiagTripped, setStageDiagTripped] = useState(false);
+  const [diagnosticsOn, setDiagnosticsOn] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [uploadState, setUploadState] = useState<UploadState>('idle');
@@ -1554,13 +1555,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Admin always gets the numbers while framing, counting down, and getting into position; in sets when pinned or tripped.
-  const showStageDiag =
-    adminUnlocked && (stageDiagPinned || stageDiagTripped || phase === 'calibrating' || phase === 'countdown' || (phase === 'break' && positionWaitSince !== null));
+  const showDiagnostics = showOnScreenDiagnostics({ unlocked: adminUnlocked, diagnosticsOn });
 
   useEffect(() => {
-    localStorage.setItem(STAGE_DIAG_KEY, stageDiagPinned ? '1' : '0');
-  }, [stageDiagPinned]);
+    localStorage.removeItem(LEGACY_STAGE_DIAG_KEY);
+  }, []);
 
   // Decoded-frame size probes plus the preview watchdog, for as long as the camera is live.
   useEffect(() => {
@@ -1631,7 +1630,6 @@ export default function App() {
         stageFixesRef.current += 1;
         stageLayoutRef.current = null;
         layoutStage();
-        setStageDiagTripped(true);
         if (stageFixesRef.current <= 10) pushLog('system', 'Camera preview didn’t fill the stage; re-laid out.', stageDiagnosticsText());
       } else if (step.action === 'reattach' && watchdogReattachesRef.current < MAX_WATCHDOG_REATTACHES) {
         watchdogReattachesRef.current += 1;
@@ -1854,6 +1852,7 @@ export default function App() {
   const nextVolunteer = () => {
     setAdminSkipConsent(false);
     setAdminNoSave(false);
+    setDiagnosticsOn(false);
     resetForRetry();
     setAthleteName('');
     updateCurrentConsent(null);
@@ -2219,6 +2218,7 @@ export default function App() {
   const lockAdmin = () => {
     setAdminSkipConsent(false);
     setAdminNoSave(false);
+    setDiagnosticsOn(false);
     setAdminUnlocked(false);
     localStorage.removeItem(ADMIN_UNLOCK_KEY);
     setAdminOpen(false);
@@ -2521,7 +2521,7 @@ export default function App() {
               controls={false}
             />
             <canvas ref={canvasRef} className="stage__overlay" />
-            {showStageDiag ? <pre ref={stageDiagRef} className="stage__diag" aria-hidden="true" /> : null}
+            <StageDiagnostics visible={showDiagnostics} ref={stageDiagRef} />
             <div className="stage__scrim" aria-hidden="true" />
 
             <div className="stage__top">
@@ -2685,7 +2685,7 @@ export default function App() {
               onSaveLocal={saveCurrentSession}
               onExportNotes={exportNotes}
               onExportCsv={exportCsv}
-              adminUnlocked={adminUnlocked}
+              showDiagnostics={showDiagnostics}
               onUpload={!resultsNotSaved && (uploadState === 'error' || uploadState === 'idle') ? uploadResult : undefined}
             />
           ) : null}
@@ -2717,8 +2717,8 @@ export default function App() {
         live={cameraStatus === 'live' ? analysis : null}
         logs={sessionLogs}
         reps={sessionReps}
-        stageDiagnostics={stageDiagPinned}
-        onStageDiagnosticsChange={setStageDiagPinned}
+        stageDiagnostics={diagnosticsOn}
+        onStageDiagnosticsChange={setDiagnosticsOn}
         pendingResultCount={pendingResultCount}
         onRetryPendingResults={() => void flushResults(true)}
         consentSettings={consentSettings}

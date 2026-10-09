@@ -389,8 +389,8 @@ function Diagnostics({
       </div>
       <label className="switch-row">
         <span className="switch-row__text">
-          <strong>Camera preview numbers</strong>
-          <span>Shows stage size, stream size, and the drawn video rect on the camera screen (admin only). Turns on by itself if the preview watchdog has to fix the layout.</span>
+          <strong>Show diagnostics on screen</strong>
+          <span>Camera preview numbers and the rep-counter line on the video, and the plank debug on the results screen. Only while admin is unlocked; turns off on Next volunteer, Sign out admin, and reload, so volunteers never see it.</span>
         </span>
         <input
           type="checkbox"

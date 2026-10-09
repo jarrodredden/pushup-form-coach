@@ -21,7 +21,8 @@ interface ResultsPanelProps {
   onSaveLocal: () => void;
   onExportNotes: () => void;
   onExportCsv: () => void;
-  adminUnlocked: boolean;
+  /** Admin unlocked and the on-screen diagnostics switch on (showOnScreenDiagnostics). */
+  showDiagnostics: boolean;
   /** Manual upload: "Retry upload" after a failed automatic upload, or "Upload result" when nothing was sent automatically. */
   onUpload?: () => void;
 }
@@ -138,7 +139,7 @@ export function ResultsPanel(props: ResultsPanelProps) {
         </section>
       ) : null}
 
-      {props.adminUnlocked && ordered.length ? (
+      {props.showDiagnostics && ordered.length ? (
         <section className="card">
           <h3 className="card__title">Admin · plank line debug</h3>
           <PlankDebugList reps={ordered} />
