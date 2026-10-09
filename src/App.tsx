@@ -47,6 +47,7 @@ import {
   describeStage,
   isIOSDevice,
   pickFrameSize,
+  prefersPortraitCamera,
   sameLayout,
   stageCoverage,
   stepWatchdog,
@@ -552,6 +553,8 @@ export default function App() {
   const cameraActive = phase === 'calibrating' || phase === 'countdown' || phase === 'set' || phase === 'break';
   /** The rest shows a short preview; getting into position for set 2 brings the full one back. */
   const stageCompact = phase === 'break' && positionWaitSince === null;
+  /** Screens where the camera is the point: it gets almost the whole phone screen. */
+  const liveStage = cameraActive && !stageCompact;
   const restRemaining = restBypassed ? 0 : restRemainingMs(restStartedAt, restNow);
   const restLocked = coachingTrialState === 'between-attempts' && restRemaining > 0;
   const restClock = formatRestClock(restRemaining);
@@ -1672,14 +1675,17 @@ export default function App() {
     plankReferenceRef.current = {};
     void unlockSound();
     try {
+      const portraitPhone = prefersPortraitCamera({
+        coarsePointer: window.matchMedia?.('(pointer: coarse)').matches ?? false,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      });
+      // A portrait phone streams portrait video; asking for 16:9 landscape made iOS report 1280×720
+      // settings for a 720×1280 stream.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: {
-          facingMode: { ideal: cameraFacing },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          aspectRatio: { ideal: 16 / 9 },
-        },
+        video: portraitPhone
+          ? { facingMode: { ideal: cameraFacing }, width: { ideal: 720 }, height: { ideal: 1280 } }
+          : { facingMode: { ideal: cameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 16 / 9 } },
       });
       streamRef.current = stream;
       const settings = stream.getVideoTracks()[0]?.getSettings?.();
@@ -2407,7 +2413,7 @@ export default function App() {
   };
 
   return (
-    <div className={`app app--${phase}${phase === 'break' && !stageCompact ? ' is-positioning' : ''}`}>
+    <div className={`app app--${phase}${phase === 'break' && !stageCompact ? ' is-positioning' : ''}${liveStage ? ' is-live' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand__mark" aria-hidden="true">
@@ -2435,7 +2441,7 @@ export default function App() {
         </div>
       </header>
 
-      {resultsNotSaved || skipConsent ? (
+      {(resultsNotSaved || skipConsent) && !liveStage ? (
         <div className="test-run-bar" role="status">
           {resultsNotSaved ? <span className="test-run-badge">Test run – results not saved</span> : null}
           {skipConsent ? <span className="test-run-badge test-run-badge--consent">Consent skipped (admin)</span> : null}
@@ -2474,6 +2480,13 @@ export default function App() {
                 <span className="chip chip--ghost">{cameraView === 'head-on' ? 'Head-on' : 'Side'}</span>
               )}
             </div>
+
+            {(resultsNotSaved || skipConsent) && liveStage ? (
+              <div className="stage__badges" role="status">
+                {resultsNotSaved ? <span className="test-run-badge">Test run · not saved</span> : null}
+                {skipConsent ? <span className="test-run-badge test-run-badge--consent">Consent skipped</span> : null}
+              </div>
+            ) : null}
 
             {workflowMode === 'coaching' && phase === 'set' ? (
               <div className="set-dots" aria-hidden="true">

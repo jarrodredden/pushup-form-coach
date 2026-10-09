@@ -6,6 +6,7 @@ import {
   describeStage,
   isIOSDevice,
   pickFrameSize,
+  prefersPortraitCamera,
   stageCoverage,
   stepWatchdog,
   toStagePoint,
@@ -115,6 +116,13 @@ describe('stream size and watchdog', () => {
     expect(isIOSDevice({ userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel', maxTouchPoints: 5 })).toBe(true);
     expect(isIOSDevice({ userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel', maxTouchPoints: 0 })).toBe(false);
     expect(isIOSDevice({ userAgent: 'Mozilla/5.0 (Linux; Android 14)' })).toBe(false);
+  });
+
+  it('asks for portrait video only on an upright touch screen', () => {
+    expect(prefersPortraitCamera({ coarsePointer: true, viewport: { width: 390, height: 797 } })).toBe(true);
+    expect(prefersPortraitCamera({ coarsePointer: true, viewport: { width: 844, height: 390 } })).toBe(false);
+    expect(prefersPortraitCamera({ coarsePointer: false, viewport: { width: 1366, height: 768 } })).toBe(false);
+    expect(prefersPortraitCamera({ coarsePointer: false, viewport: { width: 700, height: 900 } })).toBe(false);
   });
 
   it('describes stage vs stream vs rendered rect for the admin overlay', () => {

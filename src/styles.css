@@ -181,6 +181,34 @@ h1, h2, h3, p { margin: 0; }
   isolation: isolate;
 }
 .app--break:not(.is-positioning) .stage { height: 220px; height: max(200px, 30vh); height: max(200px, 30svh); }
+/*
+ * Phones, while the camera is the point (framing, countdown, set, getting into position for set 2): the
+ * stepper and test-run bar step aside (badges move onto the video) so the stage sits right under the
+ * top bar, and its height is the small viewport minus fixed-height chrome only: top bar 65 + gap 8 +
+ * gap 8 + dock 88 = 169px. Nothing that comes and goes can change it.
+ */
+@media (max-width: 959px) {
+  .is-live .stepper { display: none; }
+  .is-live .layout { padding-top: 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .is-live .stage {
+    height: 380px;
+    height: max(380px, calc(100vh - 169px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    height: max(380px, calc(100svh - 169px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  }
+}
+.stage__badges {
+  position: absolute;
+  z-index: 5;
+  top: 52px;
+  left: 12px;
+  /* Clear of the centred rep counter (96px wide) on the narrowest phones. */
+  max-width: calc(50% - 64px);
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  pointer-events: none;
+}
+.stage__badges .test-run-badge { padding: 2px 8px; font-size: 0.68rem; background-color: rgba(10, 12, 15, 0.78); }
 .stage__diag {
   position: absolute;
   top: 150px;

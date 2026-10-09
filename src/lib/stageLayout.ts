@@ -139,6 +139,11 @@ export function isIOSDevice(nav: { userAgent: string; platform?: string; maxTouc
   return /iP(hone|ad|od)/.test(nav.userAgent) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints ?? 0) > 1);
 }
 
+/** Phone or tablet held upright: its camera should be asked for portrait video. */
+export function prefersPortraitCamera(env: { coarsePointer: boolean; viewport: Size }) {
+  return env.coarsePointer && env.viewport.height > env.viewport.width;
+}
+
 export interface StageDiagnostics {
   phase: string;
   fixes: number;
