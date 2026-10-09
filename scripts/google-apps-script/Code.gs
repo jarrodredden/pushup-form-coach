@@ -16,6 +16,7 @@ const RESULT_COLUMNS = [
   'set2_feedback',
   'camera_view',
   'tempo_cues',
+  'session_id',
 ];
 
 // Writes by header name. Columns missing from an existing sheet are added at the right, so older
@@ -34,6 +35,19 @@ function ensureSheet_(spreadsheet) {
     missing.forEach((name) => headers.push(name));
   }
   return { sheet: sheet, headers: headers };
+}
+
+// The app retries until it hears back, so the same session can arrive more than once.
+function hasSession_(sheet, headers, sessionId) {
+  const column = headers.indexOf('session_id');
+  if (!sessionId || column === -1 || sheet.getLastRow() < 2) return false;
+  return Boolean(
+    sheet
+      .getRange(2, column + 1, sheet.getLastRow() - 1, 1)
+      .createTextFinder(String(sessionId))
+      .matchEntireCell(true)
+      .findNext(),
+  );
 }
 
 function ensureConsentSheet_(spreadsheet) {
@@ -102,6 +116,9 @@ function doPost(e) {
     lock.waitLock(20000);
     try {
       const target = ensureSheet_(spreadsheet);
+      if (hasSession_(target.sheet, target.headers, payload.session_id)) {
+        return json_({ ok: true, duplicate: true });
+      }
       target.sheet.appendRow(target.headers.map((name) => (payload[name] === undefined || payload[name] === null ? '' : payload[name])));
     } finally {
       lock.releaseLock();

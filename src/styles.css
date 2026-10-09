@@ -941,6 +941,8 @@ h1, h2, h3, p { margin: 0; }
 .upload-status { font-size: 0.9rem; color: var(--muted); }
 .upload-status--done { color: var(--good); font-weight: 700; }
 .upload-status--error { color: var(--low); font-weight: 700; }
+.upload-status--waiting { color: var(--mid); font-weight: 700; }
+.upload-status--uploading { color: var(--text); }
 
 /* ---------- Sheets ---------- */
 .sheet-root {

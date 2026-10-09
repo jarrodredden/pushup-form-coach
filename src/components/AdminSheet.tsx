@@ -27,6 +27,8 @@ interface AdminSheetProps {
   reps: SessionRep[];
   stageDiagnostics: boolean;
   onStageDiagnosticsChange: (on: boolean) => void;
+  pendingResultCount: number;
+  onRetryPendingResults: () => void;
   consentSettings: ConsentSettings;
   onConsentSettingsChange: (settings: ConsentSettings) => void;
   pendingConsentCount: number;
@@ -110,6 +112,8 @@ export function AdminSheet(props: AdminSheetProps) {
               live={props.live}
               stageDiagnostics={props.stageDiagnostics}
               onStageDiagnosticsChange={props.onStageDiagnosticsChange}
+              pendingResultCount={props.pendingResultCount}
+              onRetryPendingResults={props.onRetryPendingResults}
             />
           ) : null}
 
@@ -338,15 +342,28 @@ function Diagnostics({
   live,
   stageDiagnostics,
   onStageDiagnosticsChange,
+  pendingResultCount,
+  onRetryPendingResults,
 }: {
   logs: LogEntry[];
   reps: SessionRep[];
   live: PoseAnalysis | null;
   stageDiagnostics: boolean;
   onStageDiagnosticsChange: (on: boolean) => void;
+  pendingResultCount: number;
+  onRetryPendingResults: () => void;
 }) {
   return (
     <div className="log-list">
+      <div className="placement-note">
+        <strong>Results waiting to upload: {pendingResultCount}</strong>
+        <p>Rows are kept on this device until the sheet confirms them, and retry on their own (with backoff, on reload, and when back online).</p>
+        {pendingResultCount ? (
+          <button className="btn btn--secondary btn--block" onClick={onRetryPendingResults}>
+            Upload now
+          </button>
+        ) : null}
+      </div>
       <label className="switch-row">
         <span className="switch-row__text">
           <strong>Camera preview numbers</strong>

@@ -100,11 +100,20 @@ To regenerate the clips: `node scripts/generate-tempo-cues.mjs` (needs `ffmpeg` 
 
 ## Results upload (Google Sheet)
 
-Upload posts one row as `text/plain` JSON to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.
+Each result is posted as one `text/plain` JSON row to a Google Apps Script web app, which appends it to spreadsheet `1xncvpxe7yjDadtHkOncha0sag4L26KIBQTw7TrnZ0es`. The deployed web-app URL is built in; set `VITE_RESULTS_UPLOAD_URL` on Vercel only to override it.
 
-The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, a short user agent, and the protocol: **set1_feedback** / **set2_feedback** (e.g. `control` / `combined`), **camera_view** (`front` / `side`), and **tempo_cues** (`set2` when the Up / Down cues were on for set 2, otherwise `off`). The script writes values by header name and adds any missing header columns to the right, so existing sheets keep their rows. The notes summary also starts with `[set1=control set2=combined tempo=set2 camera=front]`, so the protocol is recorded even before the script is redeployed.
+**Automatic.** As soon as set 2 finishes, the row is saved without a tap. The results screen shows "Saving to results sheet…" and then "Saved ✓".
+- **Kept until confirmed.** The row first goes into a queue in `localStorage` (`pushup-results-pending`) and is removed only when the sheet confirms it. A closed or reloaded page uploads its leftover rows on the next load.
+- **Retries.** A failed upload retries on its own after 3 s, 6 s, 12 s, and so on, up to once a minute, and again as soon as the browser comes back online. A **Retry upload** button appears only after a failed attempt.
+- **Offline.** Offline, including the offline package, the screen says "Will upload when online". Save to this device and Export notes / CSV still work as backups.
+- **Finish isn't blocked.** Finish → share page is available right away; the upload keeps going in the background.
+- **No duplicates.** Every session has a `session_id`, and the queue holds one row per session. The script skips a `session_id` it already has, so retries, reloads, and manual taps can't add a second row.
+- **Manual upload.** Sessions that end another way (stopped early, free practice) still use the manual **Upload result** button.
+- **Admin view.** Admin → Diagnostics shows how many rows are waiting and has an **Upload now** button.
 
-**Redeploy for the protocol and `tempo_cues` columns (Jarrod):** paste the current `Code.gs` into **Extensions → Apps Script**, **Save**, then **Deploy → Manage deployments → pencil → Version: New version → Deploy** (same `/exec` URL).
+The script is `scripts/google-apps-script/Code.gs`. Deploy it as a Web App with **Execute as: Me** and **Who has access: Anyone**. Each row has timestamp, volunteer name, mode, set 1 / set 2 scores, delta, reps, a notes summary, a short user agent, and the protocol: **set1_feedback** / **set2_feedback** (e.g. `control` / `combined`), **camera_view** (`front` / `side`), and **tempo_cues** (`set2` when the Up / Down cues were on for set 2, otherwise `off`), plus **session_id** (used to skip duplicate uploads). The script writes values by header name and adds any missing header columns to the right, so existing sheets keep their rows. The notes summary also starts with `[set1=control set2=combined tempo=set2 camera=front]`, so the protocol is recorded even before the script is redeployed.
+
+**Redeploy for the `session_id` column and duplicate check (Jarrod):** paste the current `Code.gs` into **Extensions → Apps Script**, **Save**, then **Deploy → Manage deployments → pencil → Version: New version → Deploy** (same `/exec` URL). Until then, rows still upload automatically and the app itself never sends a session twice after a confirmed save; only the server-side check (for a save whose reply got lost) and the `session_id` column wait for the redeploy.
 
 The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts) into the spreadsheet's parent Drive folder and logs them on a **Consents** tab.
 

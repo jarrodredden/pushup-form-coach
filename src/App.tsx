@@ -3,7 +3,7 @@ import { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { AdminSheet } from './components/AdminSheet';
 import { ConsentSheet, type ConsentSubmission } from './components/ConsentSheet';
 import { HistorySheet } from './components/HistorySheet';
-import { CameraIcon, ChevronIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon, UploadIcon } from './components/Icons';
+import { CameraIcon, ChevronIcon, HistoryIcon, LockIcon, RetryIcon, StopIcon, UnlockIcon } from './components/Icons';
 import { SharePanel } from './components/SharePanel';
 import { BreakPanel, CalibratingPanel, LiveFormPanel, type ChecklistItem } from './components/LivePanels';
 import { ResultsPanel } from './components/ResultsPanel';
@@ -113,6 +113,18 @@ import {
 } from './lib/sessionFlow';
 import { isOfflinePackage, loadPoseAssets } from './lib/poseAssets';
 import { loadHistory, saveHistory } from './lib/storage';
+import {
+  dropResult,
+  dueResults,
+  enqueueResult,
+  loadPendingResults,
+  markResultFailed,
+  newSessionId,
+  nextAttemptAt,
+  parseResultUploadResponse,
+  savePendingResults,
+  type ResultRow,
+} from './lib/resultsQueue';
 import { clearVoiceQueue, duckVoice, holdVoiceQueue, playVoiceClip, voiceQueueIdle, playVoiceMessage, preloadVoiceClips, resolveVoiceClipNames } from './lib/voiceAudio';
 import { createTempoState, stepTempo, summarizeLatency, type TempoCue, type TempoLatency } from './lib/tempoCues';
 import { audioOutputLatencyMs, loadTempoCues, playTempoCue, tempoCuesReady } from './lib/tempoAudio';
@@ -143,7 +155,11 @@ const RESULTS_UPLOAD_URL =
   (import.meta.env.VITE_RESULTS_UPLOAD_URL as string | undefined) ??
   'https://script.google.com/macros/s/AKfycbyE8BrKiLi13COPUOqw9oeQObcUP40lrsRkT3jHyeK_BQsMMUWHc9HjZCcF2y0o0Dqw8g/exec';
 
-type UploadState = 'idle' | 'uploading' | 'done' | 'error';
+type UploadState = 'idle' | 'uploading' | 'done' | 'error' | 'waiting';
+const UPLOAD_TIMEOUT_MS = 25000;
+const UPLOAD_WAITING_MESSAGE = isOfflinePackage
+  ? 'Will upload when online. The result is kept on this device (and uploads next time this app is opened with internet); Export notes for a copy now.'
+  : 'Will upload when online. The result is kept on this device until it’s saved.';
 type Toast = { tone: 'success' | 'error' | 'info'; text: string };
 
 const nowIso = () => new Date().toISOString();
@@ -318,6 +334,12 @@ export default function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [uploadMessage, setUploadMessage] = useState('');
+  const [pendingResultCount, setPendingResultCount] = useState(() => loadPendingResults().length);
+  const resultSessionIdRef = useRef(newSessionId());
+  const autoQueuedSessionRef = useRef<string | null>(null);
+  const resultsFlushingRef = useRef(false);
+  const resultsFlushAgainRef = useRef(false);
+  const resultsRetryTimerRef = useRef<number | null>(null);
   const [savedLocally, setSavedLocally] = useState(false);
   const [consentSettings, setConsentSettings] = useState<ConsentSettings>(() => loadConsentSettings());
   const [currentConsent, setCurrentConsent] = useState<SignedConsent | null>(() => loadCurrentConsent());
@@ -743,6 +765,7 @@ export default function App() {
     setSessionStartedAt(null);
     setShowGoOverlay(false);
     setActiveBanner(null);
+    resultSessionIdRef.current = newSessionId();
     setUploadState('idle');
     setUploadMessage('');
     setSavedLocally(false);
@@ -1753,38 +1776,140 @@ export default function App() {
     };
   };
 
-  const uploadResult = async () => {
-    if (!athleteName.trim()) {
-      setToast({ tone: 'error', text: 'Add a name before uploading.' });
-      return;
-    }
-    setUploadState('uploading');
-    setUploadMessage('Uploading to the results sheet…');
+  /** Status line for the session on screen; uploads of earlier sessions finish quietly in the background. */
+  const setSessionUploadStatus = (sessionId: string, state: UploadState, message: string) => {
+    if (sessionId !== resultSessionIdRef.current) return;
+    setUploadState(state);
+    setUploadMessage(message);
+  };
+
+  const postResultRow = async (row: ResultRow) => {
+    if (!navigator.onLine) return { ok: false, duplicate: false, error: 'offline' };
+    const controller = typeof AbortController === 'undefined' ? null : new AbortController();
+    const timeout = window.setTimeout(() => controller?.abort(), UPLOAD_TIMEOUT_MS);
     try {
       const response = await fetch(RESULTS_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: JSON.stringify(buildUploadRow()),
+        body: JSON.stringify(row),
+        signal: controller?.signal,
       });
-      if (!response.ok) {
-        throw new Error(`Upload failed (${response.status})`);
-      }
-      setUploadState('done');
-      setUploadMessage('Uploaded to the shared results sheet.');
-      setToast({ tone: 'success', text: 'Result uploaded to the sheet.' });
-      pushLog('system', 'Result uploaded to Google Sheet.');
+      if (!response.ok) return { ok: false, duplicate: false, error: `HTTP ${response.status}` };
+      return parseResultUploadResponse(await response.json().catch(() => null));
     } catch (error) {
       console.error(error);
-      const offline = !navigator.onLine;
-      setUploadState('error');
-      setUploadMessage(
-        offline
-          ? 'No internet, so the result wasn’t uploaded. Tap Save to this device or Export notes now, and upload later when online.'
-          : 'Upload failed — the sheet may be blocked on this network. Save to this device or Export notes instead.',
-      );
-      setToast({ tone: 'error', text: offline ? 'Offline — upload skipped.' : 'Upload failed. Try again.' });
+      return { ok: false, duplicate: false, error: navigator.onLine ? 'network blocked or timed out' : 'offline' };
+    } finally {
+      window.clearTimeout(timeout);
     }
   };
+
+  /**
+   * Uploads queued result rows one at a time. Runs when a session finishes, on page load, when the
+   * browser comes back online, on a manual retry (force), and on its own backoff timer.
+   */
+  const flushResults = async (force = false) => {
+    if (resultsFlushingRef.current) {
+      resultsFlushAgainRef.current ||= force;
+      return;
+    }
+    if (resultsRetryTimerRef.current !== null) {
+      window.clearTimeout(resultsRetryTimerRef.current);
+      resultsRetryTimerRef.current = null;
+    }
+    resultsFlushingRef.current = true;
+    let queue = loadPendingResults();
+    try {
+      for (const item of dueResults(queue, Date.now(), force)) {
+        if (!navigator.onLine) {
+          setSessionUploadStatus(item.sessionId, 'waiting', UPLOAD_WAITING_MESSAGE);
+          continue;
+        }
+        setSessionUploadStatus(item.sessionId, 'uploading', 'Saving to results sheet…');
+        const result = await postResultRow(item.row);
+        // Re-read: a new session may have been queued while this one was in flight.
+        queue = loadPendingResults();
+        if (result.ok) {
+          queue = savePendingResults(dropResult(queue, item.sessionId));
+          setSessionUploadStatus(item.sessionId, 'done', 'Saved ✓');
+          pushLog('system', result.duplicate ? 'Result was already in the sheet; duplicate skipped.' : 'Result saved to the Google Sheet.', item.sessionId);
+          continue;
+        }
+        const error = result.error ?? 'upload failed';
+        queue = savePendingResults(markResultFailed(queue, item.sessionId, error, Date.now()));
+        if (error === 'offline') {
+          setSessionUploadStatus(item.sessionId, 'waiting', UPLOAD_WAITING_MESSAGE);
+        } else {
+          setSessionUploadStatus(item.sessionId, 'error', `Couldn’t reach the results sheet (${error}). Retrying automatically; the result is kept on this device until it’s saved.`);
+        }
+        pushLog('system', `Result upload failed: ${error}. Will retry.`, item.sessionId);
+      }
+    } finally {
+      resultsFlushingRef.current = false;
+    }
+    setPendingResultCount(queue.length);
+    if (resultsFlushAgainRef.current) {
+      const again = resultsFlushAgainRef.current;
+      resultsFlushAgainRef.current = false;
+      void flushResults(again);
+      return;
+    }
+    const next = nextAttemptAt(queue);
+    if (next !== null && navigator.onLine) {
+      resultsRetryTimerRef.current = window.setTimeout(() => void flushResults(), Math.max(500, next - Date.now()));
+    }
+  };
+
+  const queueCurrentResult = () => {
+    if (!athleteName.trim() || !sessionReps.length) return;
+    const sessionId = resultSessionIdRef.current;
+    autoQueuedSessionRef.current = sessionId;
+    setPendingResultCount(savePendingResults(enqueueResult(loadPendingResults(), sessionId, buildUploadRow(), Date.now())).length);
+    setSessionUploadStatus(sessionId, navigator.onLine ? 'uploading' : 'waiting', navigator.onLine ? 'Saving to results sheet…' : UPLOAD_WAITING_MESSAGE);
+    void flushResults(true);
+  };
+
+  /** Manual upload/retry. Same session_id as the automatic upload, so it can't add a second row. */
+  const uploadResult = () => {
+    if (!athleteName.trim()) {
+      setToast({ tone: 'error', text: 'Add a name before uploading.' });
+      return;
+    }
+    const sessionId = resultSessionIdRef.current;
+    if (loadPendingResults().some((item) => item.sessionId === sessionId)) {
+      setSessionUploadStatus(sessionId, 'uploading', 'Saving to results sheet…');
+      void flushResults(true);
+    } else {
+      queueCurrentResult();
+    }
+  };
+
+  // Set 2 done: save the row right away, without waiting for a tap.
+  useEffect(() => {
+    if (workflowMode !== 'coaching' || coachingTrialState !== 'complete' || !coachingComplete) return;
+    if (autoQueuedSessionRef.current === resultSessionIdRef.current) return;
+    queueCurrentResult();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowMode, coachingTrialState, coachingComplete]);
+
+  // Rows left over from a closed page or a dropped connection go up on load and when back online.
+  useEffect(() => {
+    void flushResults(true);
+    const onOnline = () => void flushResults(true);
+    const onOffline = () => {
+      if (loadPendingResults().some((item) => item.sessionId === resultSessionIdRef.current)) {
+        setSessionUploadStatus(resultSessionIdRef.current, 'waiting', UPLOAD_WAITING_MESSAGE);
+      }
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      if (resultsRetryTimerRef.current !== null) window.clearTimeout(resultsRetryTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const updateCurrentConsent = (next: SignedConsent | null) => {
     saveCurrentConsent(next);
@@ -2180,19 +2305,9 @@ export default function App() {
             <button className="btn btn--ghost" onClick={resetForRetry} aria-label="Try again with the same name">
               <RetryIcon /> Try again
             </button>
-            {uploadState === 'done' ? (
-              <button className="btn btn--primary btn--xl btn--grow" onClick={openShare}>
-                Finish <ChevronIcon />
-              </button>
-            ) : (
-              <button
-                className="btn btn--primary btn--xl btn--grow"
-                onClick={uploadResult}
-                disabled={uploadState === 'uploading' || !athleteName.trim() || !sessionReps.length}
-              >
-                <UploadIcon /> {uploadState === 'uploading' ? 'Uploading…' : uploadState === 'error' ? 'Retry upload' : 'Upload result'}
-              </button>
-            )}
+            <button className="btn btn--primary btn--xl btn--grow" onClick={openShare}>
+              Finish <ChevronIcon />
+            </button>
           </div>
         );
       default:
@@ -2399,7 +2514,7 @@ export default function App() {
               onExportNotes={exportNotes}
               onExportCsv={exportCsv}
               adminUnlocked={adminUnlocked}
-              onFinishWithoutUpload={uploadState === 'error' || isOfflinePackage ? openShare : undefined}
+              onUpload={uploadState === 'error' || uploadState === 'idle' ? uploadResult : undefined}
             />
           ) : null}
 
@@ -2428,6 +2543,8 @@ export default function App() {
         reps={sessionReps}
         stageDiagnostics={stageDiagPinned}
         onStageDiagnosticsChange={setStageDiagPinned}
+        pendingResultCount={pendingResultCount}
+        onRetryPendingResults={() => void flushResults(true)}
         consentSettings={consentSettings}
         onConsentSettingsChange={updateConsentSettings}
         pendingConsentCount={pendingConsents.length}

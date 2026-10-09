@@ -2,6 +2,7 @@ import { tempoCuesText } from '../lib/export';
 import { improvementVerdict, REPS_PER_SET, tempoCuesLabel, type SetSummary, type WorkflowMode } from '../lib/sessionFlow';
 import type { SessionRep } from '../lib/types';
 import { PlankDebugList } from './AdminSheet';
+import { UploadIcon } from './Icons';
 import { CompareBar, MetricBar } from './MetricBar';
 
 interface ResultsPanelProps {
@@ -14,15 +15,15 @@ interface ResultsPanelProps {
   reps: SessionRep[];
   focusLines: string[];
   previousScore: number | null;
-  uploadState: 'idle' | 'uploading' | 'done' | 'error';
+  uploadState: 'idle' | 'uploading' | 'done' | 'error' | 'waiting';
   uploadMessage: string;
   savedLocally: boolean;
   onSaveLocal: () => void;
   onExportNotes: () => void;
   onExportCsv: () => void;
   adminUnlocked: boolean;
-  /** Shown when the upload can't happen (offline or failed), so the session can still be finished. */
-  onFinishWithoutUpload?: () => void;
+  /** Manual upload: "Retry upload" after a failed automatic upload, or "Upload result" when nothing was sent automatically. */
+  onUpload?: () => void;
 }
 
 function RepTiles({ reps, label }: { reps: SessionRep[]; label: string }) {
@@ -175,9 +176,9 @@ export function ResultsPanel(props: ResultsPanelProps) {
             Export CSV
           </button>
         </div>
-        {props.onFinishWithoutUpload && props.uploadState !== 'done' ? (
-          <button className="btn btn--ghost btn--block" onClick={props.onFinishWithoutUpload}>
-            Finish without uploading
+        {props.onUpload ? (
+          <button className="btn btn--primary btn--block" onClick={props.onUpload} disabled={!name.trim() || !ordered.length}>
+            <UploadIcon /> {props.uploadState === 'error' ? 'Retry upload' : 'Upload result'}
           </button>
         ) : null}
       </section>
