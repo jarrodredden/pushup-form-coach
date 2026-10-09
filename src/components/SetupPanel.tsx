@@ -28,7 +28,6 @@ interface SetupPanelProps {
   onCameraViewChange: (value: CameraViewMode) => void;
   hasSavedStandard: boolean;
   showNameHint: boolean;
-  offlineDownloadHref?: string;
   consent: ConsentCardState;
   onOpenConsent: () => void;
   onDownloadConsent: () => void;
@@ -281,16 +280,6 @@ export function SetupPanel(props: SetupPanelProps) {
           <p className="fine-print">{props.hasSavedStandard ? 'Grading against the saved 100 standard for this view.' : 'Using built-in scoring (no saved 100 standard for this view).'}</p>
         </div>
       </details>
-
-      {props.offlineDownloadHref ? (
-        <p className="offline-link">
-          School Chromebook blocking this site?{' '}
-          <a href={props.offlineDownloadHref} download>
-            Download the offline version
-          </a>{' '}
-          (zip, runs without internet).
-        </p>
-      ) : null}
     </div>
   );
 }

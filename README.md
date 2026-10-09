@@ -14,7 +14,7 @@ The app walks the volunteer through six steps, shown in the progress bar at the 
 3. **Frame** — prop the phone low on the floor about 1.5 m in front (Head-on) and hold the top of a push-up. The ring fills as tracking locks in; the app says "Calibration complete", counts down 5-4-3-2-1, "Let's get started", then **GO** flashes on the video. **Start anyway** appears after a few seconds if tracking is borderline.
 4. **Set 1** — do 5 push-ups. The big counter and dots track reps; **Stop session** is always at the bottom.
 5. **Coach** — the camera stays live so the volunteer can practice the fix. The panel shows the set 1 score and the top 1–2 things to change (depth, plank line, elbows). A mandatory **2-minute rest** starts as soon as set 1 ends so set 2 isn't skewed by fatigue: **Start set 2** stays locked and shows the countdown (**Rest 2:00 … 0:01**) until the full 120 seconds pass, then works as usual and starts another countdown. Next to the countdown, an animated stick figure loops an ideal push-up (front view, 2 s per rep): straight body, hands slightly wider than the shoulders, elbows tucked about 45°, chest near the floor, full lockout ("Watch the ideal form: body straight, elbows tucked, chest low"). It's drawn in SVG from the app's own push-up model (`src/components/PushupDemo.tsx`), so it works offline; with the OS "reduce motion" setting it shows a still bottom pose. Tips and the practice bars stay available during the rest. When Admin is PIN-unlocked, a **Skip rest (admin only — testing)** button also appears; volunteers never see it.
-6. **Set 2 → Results** — the results screen shows set 1 vs set 2, the point change, a depth / plank line / elbow breakdown, and every rep's score. Tap **Upload result** to add a row to the shared Google Sheet, then **Finish** (or **Try again** with the same name). If the upload can't happen (offline package, or the upload failed), **Finish without uploading** appears under **Save & share**.
+6. **Set 2 → Results** — the results screen shows set 1 vs set 2, the point change, a depth / plank line / elbow breakdown, and every rep's score. The row is saved to the shared Google Sheet automatically (see *Results upload*); **Finish** is available right away (or **Try again** with the same name).
 7. **Share** — **Finish** opens a thank-you screen: "Thanks for helping with our science fair project! Share this with others so they can try it too." It shows https://pushup-form-coach.vercel.app as text, a big **Copy link** button (Clipboard API, then a select-and-copy fallback; if both are blocked the link is left selected for Ctrl+C), **Share** (the phone's share sheet via the Web Share API; hidden where the browser doesn't have it), and a QR code generated on the device (`qrcode-generator`, no external service), so it works offline too. The offline package still shares the public Vercel link. **Next volunteer** clears the name and consent and goes back to the start; **Back to results** returns to the scores.
 
 **History** (top right) lists sessions saved to this device with **Save to this device** on the results screen.
@@ -124,37 +124,17 @@ The same script also saves the signed consent PDFs (`type: "consent_pdf"` posts)
 
 Until this is done, signing still works and PDFs download locally, but the app reports "the upload script needs the consent update". The old script treats any post as a result row, so an attempt may leave a blank row in **Results**. To avoid repeats, the app only re-sends these PDFs when you tap **Retry** (not automatically).
 
-## School Chromebook / offline
+## Offline package (not published)
 
-If the school filter blocks `pushup-form-coach.vercel.app`, use the **offline package**: one folder that runs the whole app with no internet and no website. The pose AI (MediaPipe WASM + model) and voice clips are inside it, and the app uses the device's system fonts, so nothing is fetched from a CDN.
+The offline package is no longer linked from the app or deployed: `npm run build` produces only the web app, and nothing is served at `/downloads/`. The build script stays in the repo for local use. `npm run build:offline` writes `release/pushup-form-coach-offline.zip`, a single folder whose `index.html` runs the whole app from `file://` with no network: the pose model, MediaPipe WASM, and voice clips are bundled inside it.
 
-**Get the zip (at home, where the site works):**
-- Tap **Download the offline version** at the bottom of the app's first screen, or go to https://pushup-form-coach.vercel.app/downloads/pushup-form-coach-offline.zip (about 11 MB).
-- Also available as the `pushup-form-coach-offline` artifact on each GitHub Actions run of **Build + offline package**, or build it yourself with `npm run build:offline` (writes `release/pushup-form-coach-offline.zip`).
+**How it's built:** `scripts/build-offline.mjs` runs a Vite build in `offline` mode with relative paths, inlines the app JS/CSS into `index.html` (Chrome won't load module scripts or `crossorigin` stylesheets from `file://`), and ships the MediaPipe WASM and pose model as base64 inside plain `<script>` files. The app turns those into in-memory blobs, which avoids `fetch()`, since `file://` pages can't use it.
 
-**On the Chromebook:**
-1. Move the zip over. The easiest way is Google Drive: upload it at home, then on the Chromebook open **Files → Google Drive** and drag it into **My files → Downloads**. A USB stick also works.
-2. In the Files app, double-click the zip (it opens like a drive) and drag the `pushup-form-coach-offline` folder into **My files → Downloads**. Keep the folder together.
-3. Open the folder and double-click **`index.html`**. It opens in Chrome with a `file://` address. If it opens in something else, right-click → **Open with → Chrome**, or drag `index.html` onto a Chrome window.
-4. Look for the **Offline** tag next to "Form Coach". Tap **Start camera and sound**, then **Allow** the camera.
-
-The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
-
-**What works and what doesn't (tested in Chrome):**
-- ✅ **Opening `index.html` directly (`file://`)** — Chrome treats local files as a secure context, so the camera is allowed. Verified with networking disabled: the pose model loads, audio plays, the camera starts, and there are zero network requests.
-- ✅ **`http://localhost`** on the same computer (`python3 -m http.server 8000` in the folder) — also a secure context. Useful on a laptop that blocks local files.
-- ❌ **Serving the folder to Chromebooks over the classroom network** (`http://192.168.x.x:8000`) — Chrome blocks the camera on plain-http network addresses (`navigator.mediaDevices` isn't even available). Each device must open its own copy.
-- ⚠️ **School admin policy wins.** If IT blocks local files in Chrome (`file://` in the URL blocklist) or blocks camera access, the package can't override that. Symptoms: a "blocked by your administrator" page, or no camera prompt. Ask IT to allow it, or run the demo on a teacher/personal laptop.
-- ⚠️ **Upload result is best-effort offline.** It needs internet with `script.google.com` reachable; otherwise the app says so and you can **Save to this device** or **Export notes** instead.
-- ℹ️ History, the admin unlock, and the 100 standards are stored per browser origin, so the offline copy starts fresh. Re-enter the 100 standards once under Admin (PIN `180180`).
-
-**Optional https mirror:** the same workflow can publish the web app to GitHub Pages (`https://jarrodredden.github.io/pushup-form-coach/`) for schools that allow `github.io`. Turn it on with **Settings → Pages → Source: GitHub Actions** and a repository variable `ENABLE_GITHUB_PAGES` set to `true`.
-
-**How the package is built:** `scripts/build-offline.mjs` runs a Vite build in `offline` mode with relative paths, inlines the app JS/CSS into `index.html` (Chrome won't load module scripts or `crossorigin` stylesheets from `file://`), and ships the MediaPipe WASM and pose model as base64 inside plain `<script>` files. The app turns those into in-memory blobs, which avoids `fetch()`, since `file://` pages can't use it. `npm run build` does this automatically and publishes the zip at `/downloads/` on Vercel.
+**Optional https mirror:** the CI workflow can publish the web app to GitHub Pages (`https://jarrodredden.github.io/pushup-form-coach/`). Turn it on with **Settings → Pages → Source: GitHub Actions** and a repository variable `ENABLE_GITHUB_PAGES` set to `true`.
 
 ## Phone tips
 
-- Camera access needs a secure context: the https Vercel link, `localhost`, or the offline package opened as a local file.
+- Camera access needs a secure context: the https Vercel link or `localhost`.
 - Audio clips are MP3s in `public/voices/` played through a FIFO queue, so every line finishes before the next starts. The Up / Down tempo cues bypass that queue (see above).
 - Head-on is the recommended setup. Use Side only with room for a tripod about 2 m away.
 - The preview always fills its box, whatever size or orientation the camera stream comes in (phones often send portrait 720×1280 even when 1280×720 is requested). The video element and the skeleton overlay are both laid out from one "cover" transform (`src/lib/stageLayout.ts`), recomputed on every frame and on stream, stage, viewport, and orientation changes, so the skeleton always sits on the person.
@@ -165,17 +145,17 @@ The zip includes `README-OFFLINE.txt` with the same steps plus troubleshooting.
 
 ## Privacy
 
-Pose estimation runs on-device. Camera frames and raw pose data are never uploaded. History and 100 standards live in this browser's localStorage; only the summary row is sent when you tap **Upload result**. Signed consent PDFs go only to the project Drive folder. The current participant's PDF, plus any still waiting to upload, are kept in this browser's localStorage until **Next volunteer** or a successful upload.
+Pose estimation runs on-device. Camera frames and raw pose data are never uploaded. History and 100 standards live in this browser's localStorage; only the summary row is sent to the results sheet when a session finishes (or on **Upload result**). Signed consent PDFs go only to the project Drive folder. The current participant's PDF, plus any still waiting to upload, are kept in this browser's localStorage until **Next volunteer** or a successful upload.
 
 ## Develop
 
 ```bash
 npm install
 npm run dev        # local dev server
-npm run typecheck && npm run lint && npm test && npm run build   # web app + offline zip
-npm run build:offline                                             # just release/pushup-form-coach-offline.zip
+npm run typecheck && npm run lint && npm test && npm run build   # web app (what Vercel deploys)
+npm run build:offline                                             # local-only release/pushup-form-coach-offline.zip (not deployed)
 ```
 
-The MediaPipe WASM is copied from `node_modules` into `public/mediapipe/` automatically (`predev`/`prebuild`), and the pose model is vendored at `public/models/`, so neither build depends on a CDN.
+The MediaPipe WASM is copied from `node_modules` into `public/mediapipe/` automatically (`predev`/`prebuild`), and the pose model is vendored at `public/models/`, so no build depends on a CDN.
 
 UI lives in `src/components/`; the step/phase rules and set summaries are in `src/lib/sessionFlow.ts` (unit tested), and the 100-standard scoring is in `src/lib/baselineStorage.ts`.

@@ -83,8 +83,6 @@ h1, h2, h3, p { margin: 0; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.offline-link { padding: 4px 4px 0; text-align: center; font-size: 0.86rem; color: var(--muted); }
-.offline-link a { color: var(--volt); font-weight: 700; }
 .topbar__actions { display: flex; gap: 6px; }
 
 .icon-button {

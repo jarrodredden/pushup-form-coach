@@ -1,6 +1,6 @@
 // Builds the self-contained offline package (no CDN, no network) and zips it.
 //   node scripts/build-offline.mjs                 -> release/pushup-form-coach-offline.zip
-//   node scripts/build-offline.mjs --copy-to DIR   -> also copies the zip into DIR (used to publish it on Vercel)
+//   node scripts/build-offline.mjs --copy-to DIR   -> also copies the zip into DIR (not used by the deployed build)
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';

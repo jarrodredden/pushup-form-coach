@@ -1,4 +1,4 @@
-name: Build + offline package
+name: Build
 
 on:
   push:
@@ -22,12 +22,6 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      # GitHub zips artifacts on download, so upload the folder itself (not the zip) to avoid a zip-in-a-zip.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pushup-form-coach-offline
-          path: dist-offline
-          retention-days: 90
       - if: vars.ENABLE_GITHUB_PAGES == 'true'
         uses: actions/upload-pages-artifact@v3
         with:

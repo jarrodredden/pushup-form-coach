@@ -2177,7 +2177,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     if (!secureContext) {
-      setCameraError('Camera access requires HTTPS, localhost, or opening the offline package file directly.');
+      setCameraError('Camera access requires HTTPS or localhost.');
       return;
     }
 
@@ -2427,7 +2427,7 @@ export default function App() {
         <section className="panel-col">
           {cameraError || !secureContext ? (
             <div className="alert" role="alert">
-              {!secureContext ? 'Camera access is blocked on plain http:// addresses. Open the app over https://, localhost, or open the offline package’s index.html file directly.' : cameraError}
+              {!secureContext ? 'Camera access is blocked on plain http:// addresses. Open the app over https:// or localhost.' : cameraError}
             </div>
           ) : null}
 
@@ -2450,7 +2450,6 @@ export default function App() {
               onCameraViewChange={setCameraView}
               hasSavedStandard={Boolean(baselines.references[gradingAngle])}
               showNameHint={needsName}
-              offlineDownloadHref={isOfflinePackage ? undefined : `${import.meta.env.BASE_URL}downloads/pushup-form-coach-offline.zip`}
               consent={{
                 signed: consentSigned,
                 needsName,

@@ -7,7 +7,7 @@
     "predev": "node scripts/copy-mediapipe.mjs",
     "dev": "vite",
     "prebuild": "node scripts/copy-mediapipe.mjs",
-    "build": "vite build && node scripts/build-offline.mjs --copy-to dist/downloads",
+    "build": "vite build",
     "build:web": "node scripts/copy-mediapipe.mjs && vite build",
     "build:offline": "node scripts/copy-mediapipe.mjs && node scripts/build-offline.mjs",
     "preview": "vite preview",
