@@ -41,6 +41,18 @@ import {
 import { buildCsv, buildNotesExport, downloadBlob, downloadTextFile } from './lib/export';
 import { shouldMirrorPreview } from './lib/mirroring';
 import { coverLayout, sameLayout, toStagePoint, type StageLayout } from './lib/stageLayout';
+import {
+  createFormColorState,
+  depthPulseActive,
+  ELBOW_JOINTS,
+  FORM_GOOD_COLOR,
+  formColorsActive,
+  formScoresFromAnalysis,
+  jointComponent,
+  SKELETON_SEGMENTS,
+  stepFormColors,
+  type FormColorState,
+} from './lib/formColors';
 import { createRepCounter } from './lib/repCounter';
 import { liveCoachingIssues, shortenCue, weightedRepScore, type CoachingIssueKey } from './lib/coaching';
 import { createRollingMedian, elbowTuckScore, type ElbowIdealRange } from './lib/elbowTuck';
@@ -214,6 +226,7 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const stageLayoutRef = useRef<StageLayout | null>(null);
+  const formColorStateRef = useRef<FormColorState>(createFormColorState());
   const stageDprRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const poseRef = useRef<PoseLandmarker | null>(null);
@@ -319,6 +332,7 @@ export default function App() {
   const feedbackMode = feedbackModeFor(feedbackSetting, workflowMode, coachingTrialState);
   const spokenCoachingEnabled = spokenTipsFor(feedbackSetting, feedbackMode, spokenTipsSwitch);
   const modeAllowsVisuals = feedbackMode === 'visual' || feedbackMode === 'combined';
+  const formColorsOn = formColorsActive({ feedbackMode, workflowMode, trialState: coachingTrialState, adminUnlocked });
   const modeAllowsAudio = feedbackMode === 'audio' || feedbackMode === 'combined';
   const tempoCuesSwitchRef = useRef(tempoCuesSwitch);
   useEffect(() => {
@@ -1192,7 +1206,7 @@ export default function App() {
     return next;
   };
 
-  const drawSkeleton = (landmarks: PosePoint[] | null | undefined) => {
+  const drawSkeleton = (landmarks: PosePoint[] | null | undefined, colors: FormColorState | null) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
@@ -1203,36 +1217,77 @@ export default function App() {
     ctx.setTransform(stageDprRef.current, 0, 0, stageDprRef.current, 0, 0);
     // Landmarks stay in raw camera coordinates for scoring; mirroring happens only when drawing.
     const at = (point: PosePoint) => toStagePoint(point, layout, previewMirrored);
+    const visible = (point: PosePoint | undefined): point is PosePoint => Boolean(point) && (point!.visibility ?? 0) >= 0.3;
     const radius = Math.max(3, Math.min(layout.stageWidth, layout.stageHeight) / 110);
-    ctx.lineWidth = Math.max(2.5, radius * 0.9);
+    const lineWidth = Math.max(2.5, radius * 0.9);
     ctx.lineCap = 'round';
+
+    // One path per colour keeps it to a handful of draw calls per frame on phones.
+    const plainLines = new Path2D();
+    const goodLines = new Path2D();
+    for (const { from, to, component } of SKELETON_SEGMENTS) {
+      const start = landmarks[from];
+      const end = landmarks[to];
+      if (!visible(start) || !visible(end)) continue;
+      const a = at(start);
+      const b = at(end);
+      const path = colors?.good[component] ? goodLines : plainLines;
+      path.moveTo(a.x, a.y);
+      path.lineTo(b.x, b.y);
+    }
+    if (colors) {
+      // Dark under-stroke so both colours stay readable over bright video.
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.lineWidth = lineWidth + 3;
+      ctx.stroke(plainLines);
+      ctx.stroke(goodLines);
+    }
+    ctx.lineWidth = lineWidth;
     ctx.strokeStyle = 'rgba(190, 255, 92, 0.85)';
-    ctx.fillStyle = '#f4ffe0';
+    ctx.stroke(plainLines);
+    ctx.strokeStyle = FORM_GOOD_COLOR;
+    ctx.stroke(goodLines);
 
-    const joints: Array<[number, number]> = [
-      [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28], [11, 24], [12, 23],
-    ];
-
-    for (const [a, b] of joints) {
-      const start = landmarks[a];
-      const end = landmarks[b];
-      if (!start || !end) continue;
-      if ((start.visibility ?? 0) < 0.3 || (end.visibility ?? 0) < 0.3) continue;
-      const from = at(start);
-      const to = at(end);
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-    }
-
-    for (const point of landmarks) {
-      if ((point.visibility ?? 0) < 0.3) continue;
+    const plainJoints = new Path2D();
+    const goodJoints = new Path2D();
+    landmarks.forEach((point, index) => {
+      if (!visible(point)) return;
       const { x, y } = at(point);
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
+      const path = colors?.good[jointComponent(index)] ? goodJoints : plainJoints;
+      path.moveTo(x + radius, y);
+      path.arc(x, y, radius, 0, Math.PI * 2);
+    });
+    ctx.fillStyle = '#f4ffe0';
+    ctx.fill(plainJoints);
+    ctx.fillStyle = FORM_GOOD_COLOR;
+    ctx.fill(goodJoints);
+
+    const now = performance.now();
+    if (colors && depthPulseActive(colors, now)) {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 90);
+      ctx.strokeStyle = FORM_GOOD_COLOR;
+      ctx.lineWidth = Math.max(2, radius * 0.6);
+      ctx.globalAlpha = 0.55 + 0.45 * pulse;
+      for (const index of ELBOW_JOINTS) {
+        const point = landmarks[index];
+        if (!visible(point)) continue;
+        const { x, y } = at(point);
+        ctx.beginPath();
+        ctx.arc(x, y, radius * (2.2 + pulse * 0.8), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
+  };
+
+  /** Live per-component colours for set 2 (see formColors.ts); null when the plain overlay applies. */
+  const updateFormColors = (frame: PoseAnalysis, landmarks: PosePoint[] | null | undefined) => {
+    if (!formColorsOn || frame.confidence < MIN_SIGNAL) {
+      formColorStateRef.current = createFormColorState();
+      return null;
+    }
+    formColorStateRef.current = stepFormColors(formColorStateRef.current, formScoresFromAnalysis(frame, landmarks, frame.viewMode), performance.now());
+    return formColorStateRef.current;
   };
 
   useEffect(() => {
@@ -1265,7 +1320,6 @@ export default function App() {
 
   useEffect(() => {
     frameHandlerRef.current = (landmarks, worldLandmarks) => {
-      drawSkeleton(modeAllowsVisuals ? landmarks : null);
       const video = videoRef.current;
       const aspect = video?.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 0.75;
       const plankReference = plankReferenceRef.current;
@@ -1274,7 +1328,9 @@ export default function App() {
       if (cameraView === 'head-on' && inPlank && frame.confidence >= 0.72 && frame.elbowAngle >= REP_TOP_ANGLE) {
         plankReferenceRef.current = updatePlankReference(plankReference, landmarks, aspect);
       }
-      processAnalysis(applyBaselineBias(frame));
+      const analyzed = applyBaselineBias(frame);
+      drawSkeleton(modeAllowsVisuals ? landmarks : null, modeAllowsVisuals ? updateFormColors(analyzed, landmarks) : null);
+      processAnalysis(analyzed);
     };
   });
 
@@ -1979,6 +2035,12 @@ export default function App() {
                   <span key={index} className={index < currentSetReps.length ? 'set-dot is-done' : 'set-dot'} />
                 ))}
               </div>
+            ) : null}
+
+            {formColorsOn && modeAllowsVisuals && (phase === 'set' || phase === 'countdown') ? (
+              <p className="form-legend">
+                <span className="form-legend__swatch" aria-hidden="true" /> Blue = good form
+              </p>
             ) : null}
 
             {showAlert ? <div className="stage__alert" role="alert">{activeBanner}</div> : null}
