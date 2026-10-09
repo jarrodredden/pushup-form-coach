@@ -1413,7 +1413,7 @@ export default function App() {
     const lines = repLines(machine);
     const state = calibrationStateRef.current !== 'counting' || isResting() ? 'idle' : machine.armed ? machine.phase : 'waiting for the top';
     return [
-      `reps ${state} · arms ${angle === null || angle === undefined ? '–' : `${Math.round(angle)}°`} · top ${Math.round(machine.topAngle)}° · down ≤${Math.round(lines.down)}° up ≥${Math.round(lines.up)}°`,
+      `reps ${state} · arms ${angle === null || angle === undefined ? '–' : `${Math.round(angle)}°`} · top ${Math.round(machine.topAngle)}° · down ≤${Math.round(lines.down)}°${machine.phase === 'bottom' ? ` up ≥${Math.round(lines.up)}°` : ''}`,
       `pose ${posture.upright ? 'upright' : posture.horizontal ? 'plank' : posture.reason}${note ? ` · ${note}` : ''}`,
     ].join('\n');
   };
